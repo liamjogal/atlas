@@ -10,13 +10,14 @@ from typing import Any
 
 import duckdb
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from atlas.config import ONTOLOGY_PATH
+from atlas.config import ONTOLOGY_PATH, WEB_DIST_DIR
 from atlas.db import connect
 from atlas.ontology import ObjectStore, load_ontology
 from atlas.ontology.store import OntologyQueryError
-from atlas.sync import SyncScheduler
+from atlas.sync import SyncScheduler, read_last_sync
 
 RESERVED_PARAMS = {"limit", "offset", "order_by", "desc"}
 
@@ -41,6 +42,33 @@ class ObjectSetRequest(BaseModel):
     desc: bool = False
     limit: int = 100
     offset: int = 0
+
+
+class GroupBy(BaseModel):
+    property: str
+    bucket: str | None = None
+
+
+class Metric(BaseModel):
+    op: str
+    property: str
+
+
+class AggregateRequest(BaseModel):
+    object_type: str
+    steps: list[Step] = []
+    group_by: list[GroupBy] = []
+    metrics: list[Metric] = []
+    limit: int = 1000
+
+
+def apply_steps(object_set, steps: list[Step]):
+    for step in steps:
+        if step.where:
+            object_set = object_set.where(step.where.property, step.where.op, step.where.value)
+        if step.search_around:
+            object_set = object_set.search_around(step.search_around)
+    return object_set
 
 
 def create_app(sync_every: int | None = None) -> FastAPI:
@@ -80,7 +108,7 @@ def create_app(sync_every: int | None = None) -> FastAPI:
         return {
             "status": "ok",
             "sync_every_seconds": scheduler.every_seconds if scheduler else None,
-            "last_sync": scheduler.last_result if scheduler else None,
+            "last_sync": read_last_sync(),
         }
 
     @app.get("/api/ontology")
@@ -151,12 +179,7 @@ def create_app(sync_every: int | None = None) -> FastAPI:
         """Compose filters and link traversals ("search arounds") into one query."""
 
         def query():
-            object_set = store(request).objects(body.object_type)
-            for step in body.steps:
-                if step.where:
-                    object_set = object_set.where(step.where.property, step.where.op, step.where.value)
-                if step.search_around:
-                    object_set = object_set.search_around(step.search_around)
+            object_set = apply_steps(store(request).objects(body.object_type), body.steps)
             return {
                 "object_type": object_set.object_type,
                 "total": object_set.count(),
@@ -164,5 +187,26 @@ def create_app(sync_every: int | None = None) -> FastAPI:
             }
 
         return run(query)
+
+    @app.post("/api/objectSets/aggregate")
+    def aggregate_object_set(request: Request, body: AggregateRequest):
+        """Group an object set and count it, e.g. earthquakes per day or alerts per event type."""
+
+        def query():
+            object_set = apply_steps(store(request).objects(body.object_type), body.steps)
+            return {
+                "object_type": object_set.object_type,
+                "data": object_set.aggregate(
+                    [(g.property, g.bucket) for g in body.group_by],
+                    [(m.op, m.property) for m in body.metrics],
+                    body.limit,
+                ),
+            }
+
+        return run(query)
+
+    # The built web app (npm run build in web/) is served from the same origin as the API.
+    if WEB_DIST_DIR.exists():
+        app.mount("/", StaticFiles(directory=WEB_DIST_DIR, html=True), name="web")
 
     return app

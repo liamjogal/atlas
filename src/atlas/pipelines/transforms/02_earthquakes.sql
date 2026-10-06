@@ -30,7 +30,7 @@ distances AS (
               * pow(sin(radians(c.longitude - e.longitude) / 2), 2)
         )) AS km
     FROM latest e
-    CROSS JOIN clean.counties c
+    CROSS JOIN clean.county_base c
 ),
 nearest AS (
     SELECT id, arg_min(geoid, km) AS geoid, min(km) AS km

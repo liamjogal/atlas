@@ -1,11 +1,13 @@
 """One sync cycle: pull every source into the landing zone, then rebuild clean datasets."""
 
+import json
 import logging
 import threading
 from datetime import datetime, timezone
 
 import duckdb
 
+from atlas.config import LAST_SYNC_PATH
 from atlas.connectors import CONNECTORS
 from atlas.pipelines import build
 
@@ -21,11 +23,17 @@ def run_sync(con: duckdb.DuckDBPyConnection) -> dict:
             sources[name] = f"FAILED: {exc}"
             log.exception("connector %s failed", name)
     tables = build(con.cursor())
-    return {
+    result = {
         "finished_at": datetime.now(timezone.utc).isoformat(),
         "sources": sources,
         "tables": tables,
     }
+    LAST_SYNC_PATH.write_text(json.dumps(result))
+    return result
+
+
+def read_last_sync() -> dict | None:
+    return json.loads(LAST_SYNC_PATH.read_text()) if LAST_SYNC_PATH.exists() else None
 
 
 class SyncScheduler:
@@ -34,7 +42,6 @@ class SyncScheduler:
     def __init__(self, con: duckdb.DuckDBPyConnection, every_seconds: int):
         self.con = con
         self.every_seconds = every_seconds
-        self.last_result: dict | None = None
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._loop, daemon=True)
 
@@ -44,10 +51,22 @@ class SyncScheduler:
     def stop(self) -> None:
         self._stop.set()
 
+    def _seconds_until_due(self) -> float:
+        last = read_last_sync()
+        if last is None:
+            return 0
+        age = (datetime.now(timezone.utc) - datetime.fromisoformat(last["finished_at"])).total_seconds()
+        return max(0, self.every_seconds - age)
+
     def _loop(self) -> None:
-        while not self._stop.wait(self.every_seconds):
+        # Due times come from the last recorded sync, so a restart catches up right away
+        # instead of serving stale data for a full interval.
+        while not self._stop.wait(self._seconds_until_due()):
             try:
-                self.last_result = run_sync(self.con)
-                log.info("sync complete: %s", self.last_result["tables"])
+                result = run_sync(self.con)
+                log.info("sync complete: %s", result["tables"])
             except Exception:
                 log.exception("sync failed")
+                # A failed sync leaves the last record unchanged, so back off before retrying.
+                if self._stop.wait(min(60, self.every_seconds)):
+                    return

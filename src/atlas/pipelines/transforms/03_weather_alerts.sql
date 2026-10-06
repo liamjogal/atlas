@@ -40,4 +40,4 @@ FROM latest_alerts;
 CREATE OR REPLACE TABLE clean.alert_counties AS
 SELECT DISTINCT a.id AS alert_id, c.geoid
 FROM (SELECT id, unnest(same_codes) AS same_code FROM latest_alerts) a
-JOIN clean.counties c ON c.geoid = substr(a.same_code, 2);
+JOIN clean.county_base c ON c.geoid = substr(a.same_code, 2);

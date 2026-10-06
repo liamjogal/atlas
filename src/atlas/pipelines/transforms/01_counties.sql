@@ -1,5 +1,5 @@
--- Census Gazetteer -> clean.counties
-CREATE OR REPLACE TABLE clean.counties AS
+-- Census Gazetteer -> clean.county_base (status columns are added in 04_county_status.sql)
+CREATE OR REPLACE TABLE clean.county_base AS
 SELECT
     geoid,
     name,

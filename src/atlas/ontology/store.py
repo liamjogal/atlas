@@ -23,7 +23,10 @@ SQL_TYPES = {
     "string": "VARCHAR", "integer": "BIGINT", "double": "DOUBLE",
     "boolean": "BOOLEAN", "timestamp": "TIMESTAMPTZ",
 }
-MAX_PAGE_SIZE = 1000
+MAX_PAGE_SIZE = 5000
+BUCKETS = {"hour", "day", "week", "month"}
+METRICS = {"avg", "min", "max", "sum"}
+NUMERIC_TYPES = {"integer", "double"}
 
 
 class OntologyQueryError(ValueError):
@@ -108,6 +111,57 @@ class ObjectSet:
             sql = f"SELECT * FROM {target_table} WHERE {target_pk} IN ({joined})"
 
         return ObjectSet(self.store, side.target_type, sql, self.params)
+
+    def aggregate(
+        self,
+        group_by: list[tuple[str, str | None]],
+        metrics: list[tuple[str, str]] = (),
+        limit: int = 1000,
+    ) -> list[dict]:
+        """Count (plus optional metrics) per group. Timestamp groups can be bucketed by hour/day/week/month.
+
+        Bucketed groups come back in time order; plain groups come back largest first.
+        """
+        obj = self.definition
+        group_exprs, select_exprs = [], []
+        for prop, bucket in group_by:
+            if prop not in obj.properties:
+                raise OntologyQueryError(f"{self.object_type} has no property '{prop}'")
+            expr = _ident(prop)
+            if bucket:
+                if bucket not in BUCKETS or obj.properties[prop].type != "timestamp":
+                    raise OntologyQueryError(f"Bucket '{bucket}' needs a timestamp property and one of {sorted(BUCKETS)}")
+                expr = f"date_trunc('{bucket}', {expr})"
+            group_exprs.append(expr)
+            select_exprs.append(f"{expr} AS {_ident(prop)}")
+
+        metric_names = []
+        for op, prop in metrics:
+            if op not in METRICS:
+                raise OntologyQueryError(f"Unknown metric '{op}', expected one of {sorted(METRICS)}")
+            if obj.properties.get(prop) is None or obj.properties[prop].type not in NUMERIC_TYPES:
+                raise OntologyQueryError(f"Metric '{op}' needs a numeric property, got '{prop}'")
+            metric_names.append(f"{op}_{prop}")
+            select_exprs.append(f"{op}({_ident(prop)}) AS {_ident(metric_names[-1])}")
+
+        bucketed = any(bucket for _, bucket in group_by)
+        order = ", ".join(group_exprs) if bucketed else "count DESC"
+        sql = (
+            f"SELECT {', '.join(select_exprs + ['count(*) AS count'])} FROM ({self.sql}) "
+            + (f"GROUP BY {', '.join(group_exprs)} " if group_exprs else "")
+            + f"ORDER BY {order} LIMIT {max(1, min(limit, MAX_PAGE_SIZE))}"
+        )
+        cursor = self.store.con.cursor()
+        rows = cursor.execute(sql, self.params).fetchall()
+        group_names = [prop for prop, _ in group_by]
+        return [
+            {
+                "group": dict(zip(group_names, row[: len(group_names)])),
+                "metrics": dict(zip(metric_names, row[len(group_names) : -1])),
+                "count": row[-1],
+            }
+            for row in rows
+        ]
 
     def count(self) -> int:
         cursor = self.store.con.cursor()

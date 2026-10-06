@@ -17,6 +17,11 @@ object_types:
       land_area_sqmi: {type: double}
       latitude: {type: double}
       longitude: {type: double}
+      active_alert_count: {type: integer, description: Active NWS alerts covering this county}
+      max_alert_severity: {type: string, description: Worst active alert severity, if any}
+      max_alert_severity_rank: {type: integer, description: 0 none, 1 Minor ... 4 Extreme}
+      recent_quake_count: {type: integer, description: Earthquakes linked to this county in the past 7 days}
+      max_quake_magnitude: {type: double}
 
   Earthquake:
     description: A seismic event detected by the USGS network (live feed, past 7 days).
