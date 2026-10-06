@@ -1,0 +1,82 @@
+# The Ontology: maps clean datasets onto real-world objects and the links between them.
+#
+# Apps, the API and (later) AI agents only ever see objects, never tables. The backing
+# dataset can be rebuilt, renamed or re-sourced without breaking anything downstream,
+# as long as this mapping still holds.
+
+object_types:
+  County:
+    description: A US county, the unit for population, jurisdiction and response planning.
+    backing_dataset: clean.counties
+    primary_key: geoid
+    title_property: name
+    properties:
+      geoid: {type: string, description: 5-digit FIPS code}
+      name: {type: string}
+      state: {type: string}
+      land_area_sqmi: {type: double}
+      latitude: {type: double}
+      longitude: {type: double}
+
+  Earthquake:
+    description: A seismic event detected by the USGS network (live feed, past 7 days).
+    backing_dataset: clean.earthquakes
+    primary_key: event_id
+    title_property: place
+    properties:
+      event_id: {type: string}
+      magnitude: {type: double}
+      place: {type: string}
+      occurred_at: {type: timestamp}
+      updated_at: {type: timestamp}
+      latitude: {type: double}
+      longitude: {type: double}
+      depth_km: {type: double}
+      significance: {type: integer, description: USGS significance score 0-1000+}
+      tsunami_flag: {type: boolean}
+      pager_alert: {type: string, description: USGS PAGER impact level (green/yellow/orange/red)}
+      review_status: {type: string, description: automatic or reviewed}
+      county_geoid: {type: string, description: Nearest US county within 100 km, if any}
+      distance_to_county_km: {type: double}
+      url: {type: string}
+
+  WeatherAlert:
+    description: An active National Weather Service alert (warnings, watches, advisories).
+    backing_dataset: clean.weather_alerts
+    primary_key: alert_id
+    title_property: headline
+    properties:
+      alert_id: {type: string}
+      event: {type: string, description: e.g. Red Flag Warning, Flash Flood Warning}
+      headline: {type: string}
+      severity: {type: string, description: Extreme, Severe, Moderate, Minor, Unknown}
+      urgency: {type: string}
+      certainty: {type: string}
+      area_description: {type: string}
+      sender: {type: string}
+      sent_at: {type: timestamp}
+      effective_at: {type: timestamp}
+      expires_at: {type: timestamp}
+      description: {type: string}
+      instruction: {type: string}
+
+link_types:
+  # Foreign-key link: each Earthquake row stores the key of its County.
+  - api_name: earthquakeCounty
+    source: Earthquake
+    target: County
+    source_side_name: county          # Earthquake -> County
+    target_side_name: earthquakes     # County -> [Earthquake]
+    cardinality: many_to_one
+    foreign_key: county_geoid
+
+  # Join-table link: one alert covers many counties and a county can have many alerts.
+  - api_name: weatherAlertCounty
+    source: WeatherAlert
+    target: County
+    source_side_name: counties        # WeatherAlert -> [County]
+    target_side_name: weatherAlerts   # County -> [WeatherAlert]
+    cardinality: many_to_many
+    join_dataset: clean.alert_counties
+    join_source_key: alert_id
+    join_target_key: geoid
