@@ -10,6 +10,7 @@ dependencies = [
     "duckdb>=1.5.6",
     "fastapi>=0.142.2",
     "httpx>=0.28.1",
+    "psycopg[binary,pool]>=3.3.6",
     "pydantic>=2.13.5",
     "pytz>=2026.5",
     "pyyaml>=6.0.3",
@@ -22,3 +23,8 @@ atlas = "atlas.cli:main"
 [build-system]
 requires = ["uv_build>=0.9.7,<0.10.0"]
 build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]

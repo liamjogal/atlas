@@ -4,13 +4,49 @@ A mini Palantir-style ontology platform applied to disaster response. It pulls l
 earthquake (USGS) and weather-alert (NWS) feeds into a typed ontology of linked objects
 and serves them through a generic, schema-driven API.
 
-## Quick start
+## Architecture
+
+```
+connectors → data/landing/ → DuckDB pipelines → indexer → Postgres object store ← API (any number) ← web app
+└──────────────────── atlas worker (the only writer) ──────────────────┘          └─ atlas serve (read-only)
+```
+
+DuckDB is the pipeline engine (raw → clean datasets). The **indexer** loads those datasets into a
+Postgres **object store** shaped by `ontology/ontology.yaml`: one table per object type and link,
+rebuilt in a staging schema and swapped live atomically. The API only reads Postgres, so it holds no
+lock on the pipeline and can run as many instances as needed.
+
+## Setup
 
 ```bash
-uv run atlas sync       # pull all sources and rebuild clean datasets
-uv run atlas validate   # check ontology.yaml against the data
-uv run atlas serve      # API on http://127.0.0.1:8000 (docs at /docs), re-syncs every 5 min
+brew install postgresql@17 && brew services start postgresql@17   # once
+createdb atlas                                                      # once
+uv sync
 ```
+
+## Running
+
+```bash
+uv run atlas sync       # one cycle: pull sources → rebuild datasets → index objects into Postgres
+uv run atlas worker     # the same cycle every 5 min (--every SECONDS); leave it running
+uv run atlas serve      # API + web app on http://127.0.0.1:8000 (API docs at /docs)
+```
+
+Run `worker` and `serve` in separate terminals. Other commands:
+
+```bash
+uv run atlas index      # rebuild datasets and re-index from what's already landed (no network)
+uv run atlas validate   # check ontology.yaml against the clean datasets
+uv run pytest           # parity tests: DuckDB and Postgres backends must answer identically
+```
+
+**Settings:** `DATABASE_URL` (default `postgresql://localhost/atlas`). Set `ATLAS_OBJECT_STORE=duckdb`
+to serve straight from the DuckDB datasets with no Postgres. That mode is for offline use: run
+`atlas sync` first, and don't run a worker alongside it.
+
+**Inspecting the data:** `psql atlas` (the object store is in schema `ontology`; every sync is logged in
+`atlas_meta.sync_runs`), or `duckdb -ui data/atlas.duckdb` for the pipeline datasets. The worker only
+opens the DuckDB file during a sync, so the file is free between runs.
 
 ## Web app
 
@@ -32,7 +68,8 @@ cd web && npm run dev                    # or develop with hot reload on :5173 (
 | Connectors + landing zone | `src/atlas/connectors/`, `data/landing/` | Data Connection, raw datasets |
 | Pipelines | `src/atlas/pipelines/transforms/*.sql` | Pipeline Builder, Transforms |
 | Ontology | `ontology/ontology.yaml`, `src/atlas/ontology/registry.py` | Ontology Manager |
-| Object store + object sets | `src/atlas/ontology/store.py` | Object Set Service |
+| Indexer + object store | `src/atlas/index/`, Postgres schema `ontology` | Funnel, Object Storage |
+| Object sets (query compilation) | `src/atlas/ontology/store.py`, `backends.py` | Object Set Service |
 | Ontology API (objects, links, object sets, aggregations) | `src/atlas/api.py` | Ontology API v2, OSDK |
 | Web app | `web/` | Workshop, Object Explorer |
 
@@ -52,5 +89,3 @@ curl -X POST localhost:8000/api/objectSets/load -H 'content-type: application/js
 ```
 
 Filters use `<property>.<op>=<value>` with ops `eq ne gt gte lt lte contains is_null is_not_null`.
-
-DuckDB allows one writer process, so stop `atlas serve` before running `atlas sync` separately.

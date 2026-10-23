@@ -1,7 +1,8 @@
 """Object store: answers questions about objects, links and object sets.
 
 Callers ask in ontology terms ("Earthquakes with magnitude >= 4, then their
-Counties") and the store compiles that into SQL against the backing datasets.
+Counties") and the store compiles that into SQL. The SQL is the same for every
+engine; a Backend (backends.py) says where each object type's rows live and runs it.
 Identifiers in the SQL only ever come from the registry; user input is checked
 against it and passed as bound parameters.
 """
@@ -11,26 +12,17 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-import duckdb
-
+from atlas.ontology.backends import Backend, OntologyQueryError
 from atlas.ontology.registry import LinkSide, Ontology, ObjectTypeDef
 
 OPERATORS = {
     "eq": "=", "ne": "!=", "gt": ">", "gte": ">=", "lt": "<", "lte": "<=",
     "contains": "ILIKE", "is_null": "IS NULL", "is_not_null": "IS NOT NULL",
 }
-SQL_TYPES = {
-    "string": "VARCHAR", "integer": "BIGINT", "double": "DOUBLE",
-    "boolean": "BOOLEAN", "timestamp": "TIMESTAMPTZ",
-}
 MAX_PAGE_SIZE = 5000
 BUCKETS = {"hour", "day", "week", "month"}
 METRICS = {"avg", "min", "max", "sum"}
 NUMERIC_TYPES = {"integer", "double"}
-
-
-class OntologyQueryError(ValueError):
-    pass
 
 
 def _ident(name: str) -> str:
@@ -61,18 +53,20 @@ class ObjectSet:
         if op not in OPERATORS:
             raise OntologyQueryError(f"Unknown operator '{op}', expected one of {list(OPERATORS)}")
 
-        column, sql_op = _ident(prop), OPERATORS[op]
+        backend = self.store.backend
+        column, sql_op, ph = _ident(prop), OPERATORS[op], backend.placeholder
         if op in ("is_null", "is_not_null"):
             condition, params = f"{column} {sql_op}", ()
         elif op == "contains":
-            condition, params = f"{column}::VARCHAR ILIKE ?", (f"%{value}%",)
+            text = backend.sql_types["string"]
+            condition, params = f"CAST({column} AS {text}) ILIKE {ph}", (f"%{value}%",)
         else:
-            sql_type = SQL_TYPES[obj.properties[prop].type]
-            condition, params = f"{column} {sql_op} CAST(? AS {sql_type})", (value,)
+            sql_type = backend.sql_types[obj.properties[prop].type]
+            condition, params = f"{column} {sql_op} CAST({ph} AS {sql_type})", (value,)
 
         return ObjectSet(
             self.store, self.object_type,
-            f"SELECT * FROM ({self.sql}) WHERE {condition}",
+            f"SELECT * FROM ({self.sql}) AS s WHERE {condition}",
             self.params + params,
         )
 
@@ -87,15 +81,16 @@ class ObjectSet:
         link = side.link
         source = self.definition
         target = self.store.ontology.object_type(side.target_type)
-        target_table, target_pk = _ident(target.backing_dataset), _ident(target.primary_key)
+        backend = self.store.backend
+        target_table, target_pk = _ident(backend.object_table(target)), _ident(target.primary_key)
 
         if link.cardinality == "many_to_one" and side.from_source:
             # Earthquake -> County: targets whose key is one of our foreign keys.
-            keys = f"SELECT {_ident(link.foreign_key)} FROM ({self.sql})"
+            keys = f"SELECT {_ident(link.foreign_key)} FROM ({self.sql}) AS s"
             sql = f"SELECT * FROM {target_table} WHERE {target_pk} IN ({keys})"
         elif link.cardinality == "many_to_one":
             # County -> [Earthquake]: targets whose foreign key points at one of us.
-            keys = f"SELECT {_ident(source.primary_key)} FROM ({self.sql})"
+            keys = f"SELECT {_ident(source.primary_key)} FROM ({self.sql}) AS s"
             sql = f"SELECT * FROM {target_table} WHERE {_ident(link.foreign_key)} IN ({keys})"
         else:
             # Many-to-many: hop through the join dataset in whichever direction we're going.
@@ -103,9 +98,9 @@ class ObjectSet:
                 (link.join_source_key, link.join_target_key) if side.from_source
                 else (link.join_target_key, link.join_source_key)
             )
-            keys = f"SELECT {_ident(source.primary_key)} FROM ({self.sql})"
+            keys = f"SELECT {_ident(source.primary_key)} FROM ({self.sql}) AS s"
             joined = (
-                f"SELECT {_ident(theirs)} FROM {_ident(link.join_dataset)} "
+                f"SELECT {_ident(theirs)} FROM {_ident(backend.join_table(link))} "
                 f"WHERE {_ident(ours)} IN ({keys})"
             )
             sql = f"SELECT * FROM {target_table} WHERE {target_pk} IN ({joined})"
@@ -145,14 +140,14 @@ class ObjectSet:
             select_exprs.append(f"{op}({_ident(prop)}) AS {_ident(metric_names[-1])}")
 
         bucketed = any(bucket for _, bucket in group_by)
-        order = ", ".join(group_exprs) if bucketed else "count DESC"
+        # Ties are broken by the group values so results are deterministic on every engine.
+        order = ", ".join(group_exprs) if bucketed else ", ".join(["count DESC", *group_exprs])
         sql = (
-            f"SELECT {', '.join(select_exprs + ['count(*) AS count'])} FROM ({self.sql}) "
+            f"SELECT {', '.join(select_exprs + ['count(*) AS count'])} FROM ({self.sql}) AS s "
             + (f"GROUP BY {', '.join(group_exprs)} " if group_exprs else "")
             + f"ORDER BY {order} LIMIT {max(1, min(limit, MAX_PAGE_SIZE))}"
         )
-        cursor = self.store.con.cursor()
-        rows = cursor.execute(sql, self.params).fetchall()
+        rows = self.store.backend.query(sql, self.params)
         group_names = [prop for prop, _ in group_by]
         return [
             {
@@ -164,8 +159,7 @@ class ObjectSet:
         ]
 
     def count(self) -> int:
-        cursor = self.store.con.cursor()
-        return cursor.execute(f"SELECT count(*) FROM ({self.sql})", self.params).fetchone()[0]
+        return self.store.backend.query(f"SELECT count(*) FROM ({self.sql}) AS s", self.params)[0][0]
 
     def fetch(
         self,
@@ -183,23 +177,22 @@ class ObjectSet:
         columns = ", ".join(_ident(p) for p in obj.properties)
         direction = "DESC" if descending else "ASC"
         sql = (
-            f"SELECT {columns} FROM ({self.sql}) "
+            f"SELECT {columns} FROM ({self.sql}) AS s "
             f"ORDER BY {_ident(order_by)} {direction} NULLS LAST, {_ident(obj.primary_key)} "
             f"LIMIT {limit} OFFSET {int(offset)}"
         )
-        cursor = self.store.con.cursor()
-        rows = cursor.execute(sql, self.params).fetchall()
+        rows = self.store.backend.query(sql, self.params)
         return [self.store.to_object(obj, dict(zip(obj.properties, row))) for row in rows]
 
 
 class ObjectStore:
-    def __init__(self, ontology: Ontology, con: duckdb.DuckDBPyConnection):
+    def __init__(self, ontology: Ontology, backend: Backend):
         self.ontology = ontology
-        self.con = con
+        self.backend = backend
 
     def objects(self, object_type: str) -> ObjectSet:
         obj = self.ontology.object_type(object_type)
-        return ObjectSet(self, object_type, f"SELECT * FROM {_ident(obj.backing_dataset)}")
+        return ObjectSet(self, object_type, f"SELECT * FROM {_ident(self.backend.object_table(obj))}")
 
     def get(self, object_type: str, primary_key: Any) -> dict | None:
         obj = self.ontology.object_type(object_type)

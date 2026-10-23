@@ -2,15 +2,29 @@ import argparse
 import json
 import logging
 
-from atlas.config import DB_PATH, ONTOLOGY_PATH
+from atlas.config import ONTOLOGY_PATH
 from atlas.db import connect
 
 
 def cmd_sync(args) -> None:
     from atlas.sync import run_sync
 
-    with connect() as con:
-        print(json.dumps(run_sync(con), indent=2))
+    print(json.dumps(run_sync(), indent=2))
+
+
+def cmd_index(args) -> None:
+    from atlas.sync import run_sync
+
+    print(json.dumps(run_sync(pull=False), indent=2))
+
+
+def cmd_worker(args) -> None:
+    from atlas.sync import run_worker
+
+    try:
+        run_worker(args.every)
+    except KeyboardInterrupt:
+        print("worker stopped")
 
 
 def cmd_validate(args) -> None:
@@ -33,9 +47,7 @@ def cmd_serve(args) -> None:
 
     from atlas.api import create_app
 
-    if not DB_PATH.exists():
-        raise SystemExit("No data yet. Run `uv run atlas sync` first.")
-    uvicorn.run(create_app(sync_every=args.sync_every), host=args.host, port=args.port)
+    uvicorn.run(create_app(), host=args.host, port=args.port)
 
 
 def main() -> None:
@@ -43,17 +55,23 @@ def main() -> None:
     parser = argparse.ArgumentParser(prog="atlas", description="A mini Palantir-style ontology platform")
     sub = parser.add_subparsers(required=True)
 
-    sync = sub.add_parser("sync", help="Pull all sources and rebuild clean datasets once")
+    sync = sub.add_parser("sync", help="Run one cycle: pull sources, rebuild datasets, index objects")
     sync.set_defaults(func=cmd_sync)
+
+    index = sub.add_parser("index", help="Rebuild datasets and re-index objects from already-landed data")
+    index.set_defaults(func=cmd_index)
+
+    worker = sub.add_parser("worker", help="Run sync cycles on a schedule (the only process that writes)")
+    worker.add_argument("--every", type=int, default=300, metavar="SECONDS",
+                        help="Seconds between cycles (default 300)")
+    worker.set_defaults(func=cmd_worker)
 
     validate = sub.add_parser("validate", help="Check ontology.yaml against the clean datasets")
     validate.set_defaults(func=cmd_validate)
 
-    serve = sub.add_parser("serve", help="Run the Ontology API")
+    serve = sub.add_parser("serve", help="Run the Ontology API (read-only; run `atlas worker` alongside)")
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8000)
-    serve.add_argument("--sync-every", type=int, default=300, metavar="SECONDS",
-                       help="Re-sync live sources on this interval (0 to disable, default 300)")
     serve.set_defaults(func=cmd_serve)
 
     args = parser.parse_args()

@@ -5,6 +5,7 @@ Validation runs in two stages, as it does in Foundry:
   2. Against the data (every backing dataset and column exists with a compatible type).
 """
 
+import hashlib
 from pathlib import Path
 from typing import Literal
 
@@ -147,3 +148,11 @@ class Ontology(BaseModel):
 
 def load_ontology(path: Path) -> Ontology:
     return Ontology.model_validate(yaml.safe_load(path.read_text()))
+
+
+def ontology_hash(path: Path) -> str:
+    """A short fingerprint of the ontology definition, recorded with every index build.
+
+    If the API's ontology and the index's fingerprint differ, the index is out of date.
+    """
+    return hashlib.sha256(path.read_bytes()).hexdigest()[:12]

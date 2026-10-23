@@ -53,11 +53,15 @@ export interface AggregateRow {
 
 export interface Health {
   status: string
+  object_store: 'postgres' | 'duckdb'
   sync_every_seconds: number | null
+  index_matches_ontology: boolean
   last_sync: {
     finished_at: string
+    status: string
     sources: Record<string, string>
-    tables: Record<string, number>
+    datasets: Record<string, number>
+    objects: Record<string, number>
   } | null
 }
 

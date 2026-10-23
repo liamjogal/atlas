@@ -1,20 +1,25 @@
-"""One sync cycle: pull every source into the landing zone, then rebuild clean datasets."""
+"""One sync cycle: pull every source, rebuild the clean datasets, index them into the object store.
+
+Only this cycle touches DuckDB, and it opens the file just for the length of a cycle,
+so the API (which reads Postgres) never contends for it and the file is free between
+runs for anyone who wants to inspect it.
+"""
 
 import json
 import logging
-import threading
+import time
 from datetime import datetime, timezone
 
-import duckdb
-
-from atlas.config import LAST_SYNC_PATH
+from atlas.config import DATABASE_URL, LAST_SYNC_PATH, OBJECT_STORE, ONTOLOGY_PATH
 from atlas.connectors import CONNECTORS
+from atlas.db import connect
+from atlas.ontology import load_ontology, ontology_hash
 from atlas.pipelines import build
 
 log = logging.getLogger("atlas.sync")
 
 
-def run_sync(con: duckdb.DuckDBPyConnection) -> dict:
+def pull_sources() -> dict[str, str]:
     sources = {}
     for name, connector in CONNECTORS.items():
         try:
@@ -22,51 +27,86 @@ def run_sync(con: duckdb.DuckDBPyConnection) -> dict:
         except Exception as exc:  # One failing source shouldn't block the others.
             sources[name] = f"FAILED: {exc}"
             log.exception("connector %s failed", name)
-    tables = build(con.cursor())
+    return sources
+
+
+def run_sync(*, pull: bool = True, schedule_seconds: int | None = None) -> dict:
+    """Run one cycle and record it. `pull=False` rebuilds and re-indexes from what's already landed.
+
+    Raises if the pipeline or indexing fails; the failed run is still recorded.
+    """
+    started_at = datetime.now(timezone.utc)
+    ontology = load_ontology(ONTOLOGY_PATH)
+    fingerprint = ontology_hash(ONTOLOGY_PATH)
+    sources = pull_sources() if pull else {}
+    datasets: dict[str, int] = {}
+    objects: dict[str, int] = {}
+    error: Exception | None = None
+
+    try:
+        with connect() as duck:
+            datasets = build(duck.cursor())
+            problems = ontology.validate_against(duck)
+            if problems:
+                # A broken pipeline never reaches the object store; the last good index stays live.
+                raise RuntimeError("Ontology does not match the datasets:\n  " + "\n  ".join(problems))
+            if OBJECT_STORE == "postgres":
+                import psycopg
+
+                from atlas.index.indexer import build_index
+
+                with psycopg.connect(DATABASE_URL, autocommit=True) as pg:
+                    objects = build_index(ontology, duck, pg)
+    except Exception as exc:
+        error = exc
+
     result = {
+        "started_at": started_at.isoformat(),
         "finished_at": datetime.now(timezone.utc).isoformat(),
+        "status": "failed" if error else "succeeded",
+        "error": str(error) if error else None,
+        "ontology_hash": fingerprint,
+        "schedule_seconds": schedule_seconds,
         "sources": sources,
-        "tables": tables,
+        "datasets": datasets,
+        "objects": objects,
     }
-    LAST_SYNC_PATH.write_text(json.dumps(result))
+    _record(result)
+    if error:
+        raise error
     return result
 
 
-def read_last_sync() -> dict | None:
+def _record(result: dict) -> None:
+    if OBJECT_STORE == "postgres":
+        import psycopg
+
+        from atlas.index.indexer import record_sync_run
+
+        with psycopg.connect(DATABASE_URL, autocommit=True) as pg:
+            record_sync_run(
+                pg,
+                **{k: v for k, v in result.items() if k not in ("started_at", "finished_at")},
+                started_at=datetime.fromisoformat(result["started_at"]),
+                finished_at=datetime.fromisoformat(result["finished_at"]),
+            )
+    elif result["status"] == "succeeded":
+        LAST_SYNC_PATH.write_text(json.dumps(result))
+
+
+def read_last_sync_file() -> dict | None:
+    """The last successful sync in DuckDB-only mode (Postgres mode records to atlas_meta.sync_runs)."""
     return json.loads(LAST_SYNC_PATH.read_text()) if LAST_SYNC_PATH.exists() else None
 
 
-class SyncScheduler:
-    """Runs run_sync on an interval in a background thread (a tiny stand-in for Foundry schedules)."""
-
-    def __init__(self, con: duckdb.DuckDBPyConnection, every_seconds: int):
-        self.con = con
-        self.every_seconds = every_seconds
-        self._stop = threading.Event()
-        self._thread = threading.Thread(target=self._loop, daemon=True)
-
-    def start(self) -> None:
-        self._thread.start()
-
-    def stop(self) -> None:
-        self._stop.set()
-
-    def _seconds_until_due(self) -> float:
-        last = read_last_sync()
-        if last is None:
-            return 0
-        age = (datetime.now(timezone.utc) - datetime.fromisoformat(last["finished_at"])).total_seconds()
-        return max(0, self.every_seconds - age)
-
-    def _loop(self) -> None:
-        # Due times come from the last recorded sync, so a restart catches up right away
-        # instead of serving stale data for a full interval.
-        while not self._stop.wait(self._seconds_until_due()):
-            try:
-                result = run_sync(self.con)
-                log.info("sync complete: %s", result["tables"])
-            except Exception:
-                log.exception("sync failed")
-                # A failed sync leaves the last record unchanged, so back off before retrying.
-                if self._stop.wait(min(60, self.every_seconds)):
-                    return
+def run_worker(every_seconds: int) -> None:
+    """Sync now, then every `every_seconds`, until interrupted (a tiny stand-in for Foundry schedules)."""
+    log.info("worker started: syncing every %s s", every_seconds)
+    while True:
+        started = time.monotonic()
+        try:
+            result = run_sync(schedule_seconds=every_seconds)
+            log.info("sync succeeded: %s", result["objects"] or result["datasets"])
+        except Exception:
+            log.exception("sync failed; the last good index stays live")
+        time.sleep(max(0.0, every_seconds - (time.monotonic() - started)))

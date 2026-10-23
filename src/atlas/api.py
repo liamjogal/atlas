@@ -3,21 +3,25 @@
 Routes are not written per object type. They are driven by the registry, so
 adding an object type to ontology.yaml makes it queryable with no code changes.
 (The shape loosely follows Palantir's Ontology API v2.)
+
+The API only reads. It serves the Postgres object store that `atlas worker` keeps
+indexed, holds no lock on the pipeline's DuckDB file, and so can run as many
+instances as needed.
 """
 
 from contextlib import asynccontextmanager
 from typing import Any
 
-import duckdb
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from atlas.config import ONTOLOGY_PATH, WEB_DIST_DIR
+from atlas.config import DATABASE_URL, OBJECT_STORE, ONTOLOGY_PATH, WEB_DIST_DIR
 from atlas.db import connect
-from atlas.ontology import ObjectStore, load_ontology
-from atlas.ontology.store import OntologyQueryError
-from atlas.sync import SyncScheduler, read_last_sync
+from atlas.ontology import (
+    Backend, DuckDBBackend, ObjectStore, OntologyQueryError, PostgresBackend, load_ontology, ontology_hash,
+)
+from atlas.sync import read_last_sync_file
 
 RESERVED_PARAMS = {"limit", "offset", "order_by", "desc"}
 
@@ -62,6 +66,19 @@ class AggregateRequest(BaseModel):
     limit: int = 1000
 
 
+class WebAppFiles(StaticFiles):
+    """Static files where HTML is always revalidated, so a rebuild shows up on the next load.
+
+    Built assets have content hashes in their names, so they can keep normal caching.
+    """
+
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        if response.headers.get("content-type", "").startswith("text/html"):
+            response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
 def apply_steps(object_set, steps: list[Step]):
     for step in steps:
         if step.where:
@@ -71,23 +88,39 @@ def apply_steps(object_set, steps: list[Step]):
     return object_set
 
 
-def create_app(sync_every: int | None = None) -> FastAPI:
-    @asynccontextmanager
-    async def lifespan(app: FastAPI):
-        con = connect()
-        ontology = load_ontology(ONTOLOGY_PATH)
+def open_backend(ontology) -> Backend:
+    if OBJECT_STORE == "duckdb":
+        con = connect(read_only=True)
         problems = ontology.validate_against(con)
         if problems:
             raise RuntimeError("Ontology does not match the data:\n  " + "\n  ".join(problems))
-        app.state.store = ObjectStore(ontology, con)
-        app.state.scheduler = None
-        if sync_every:
-            app.state.scheduler = SyncScheduler(con, sync_every)
-            app.state.scheduler.start()
+        return DuckDBBackend(con)
+
+    backend = PostgresBackend(DATABASE_URL)
+    if backend.query("SELECT to_regnamespace('ontology')", ())[0][0] is None:
+        backend.close()
+        raise RuntimeError("The object store has not been indexed yet. Run `uv run atlas sync` first.")
+    return backend
+
+
+def last_sync(backend: Backend) -> dict | None:
+    if isinstance(backend, PostgresBackend):
+        from atlas.index.indexer import latest_sync_run
+
+        with backend.pool.connection() as conn:
+            return latest_sync_run(conn)
+    return read_last_sync_file()
+
+
+def create_app() -> FastAPI:
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        ontology = load_ontology(ONTOLOGY_PATH)
+        backend = open_backend(ontology)
+        app.state.store = ObjectStore(ontology, backend)
+        app.state.ontology_hash = ontology_hash(ONTOLOGY_PATH)
         yield
-        if app.state.scheduler:
-            app.state.scheduler.stop()
-        con.close()
+        backend.close()
 
     app = FastAPI(title="Atlas Ontology API", lifespan=lifespan)
 
@@ -99,16 +132,20 @@ def create_app(sync_every: int | None = None) -> FastAPI:
             return fn()
         except KeyError as exc:
             raise HTTPException(404, str(exc.args[0]))
-        except (OntologyQueryError, duckdb.ConversionException, duckdb.InvalidInputException) as exc:
+        except OntologyQueryError as exc:
             raise HTTPException(400, str(exc))
 
     @app.get("/api/health")
     def health(request: Request):
-        scheduler = request.app.state.scheduler
+        backend = store(request).backend
+        sync = last_sync(backend)
         return {
             "status": "ok",
-            "sync_every_seconds": scheduler.every_seconds if scheduler else None,
-            "last_sync": read_last_sync(),
+            "object_store": backend.name,
+            "sync_every_seconds": sync.get("schedule_seconds") if sync else None,
+            "last_sync": sync,
+            # False means ontology.yaml changed since the last index build: run a sync.
+            "index_matches_ontology": bool(sync) and sync["ontology_hash"] == request.app.state.ontology_hash,
         }
 
     @app.get("/api/ontology")
@@ -207,6 +244,6 @@ def create_app(sync_every: int | None = None) -> FastAPI:
 
     # The built web app (npm run build in web/) is served from the same origin as the API.
     if WEB_DIST_DIR.exists():
-        app.mount("/", StaticFiles(directory=WEB_DIST_DIR, html=True), name="web")
+        app.mount("/", WebAppFiles(directory=WEB_DIST_DIR, html=True), name="web")
 
     return app
