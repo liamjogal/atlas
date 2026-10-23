@@ -1,6 +1,6 @@
 # Atlas
 
-A mini Palantir-style ontology platform applied to disaster response. It pulls live
+An ontology platform applied to disaster response. It pulls live
 earthquake (USGS) and weather-alert (NWS) feeds into a typed ontology of linked objects
 and serves them through a generic, schema-driven API.
 
@@ -63,15 +63,15 @@ cd web && npm run dev                    # or develop with hot reload on :5173 (
 
 ## How it fits together
 
-| Layer | Where | Palantir equivalent |
+| Layer | Where | What it does |
 | --- | --- | --- |
-| Connectors + landing zone | `src/atlas/connectors/`, `data/landing/` | Data Connection, raw datasets |
-| Pipelines | `src/atlas/pipelines/transforms/*.sql` | Pipeline Builder, Transforms |
-| Ontology | `ontology/ontology.yaml`, `src/atlas/ontology/registry.py` | Ontology Manager |
-| Indexer + object store | `src/atlas/index/`, Postgres schema `ontology` | Funnel, Object Storage |
-| Object sets (query compilation) | `src/atlas/ontology/store.py`, `backends.py` | Object Set Service |
-| Ontology API (objects, links, object sets, aggregations) | `src/atlas/api.py` | Ontology API v2, OSDK |
-| Web app | `web/` | Workshop, Object Explorer |
+| Connectors + landing zone | `src/atlas/connectors/`, `data/landing/` | Pull each source and keep its raw snapshots untouched |
+| Pipelines | `src/atlas/pipelines/transforms/*.sql` | Clean, deduplicate and link the raw data into datasets |
+| Ontology | `ontology/ontology.yaml`, `src/atlas/ontology/registry.py` | Define object types, properties and links over the datasets |
+| Indexer + object store | `src/atlas/index/`, Postgres schema `ontology` | Load the datasets into Postgres, shaped by the ontology |
+| Object sets (query compilation) | `src/atlas/ontology/store.py`, `backends.py` | Turn filters and link traversals into SQL |
+| Ontology API (objects, links, object sets, aggregations) | `src/atlas/api.py` | Generic, schema-driven access to every object type |
+| Web app | `web/` | Live operating picture and object explorer |
 
 ## API examples
 

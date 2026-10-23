@@ -1,7 +1,7 @@
 """The indexer: loads the pipeline's clean datasets into the Postgres object store.
 
-This is the step between "data" and "objects" (Palantir's equivalent is Funnel,
-which indexes datasets into object storage). It is driven entirely by the ontology:
+This is the step between "data" and "objects": it indexes datasets into the
+object store that the API serves. It is driven entirely by the ontology:
 for each object type it copies exactly the mapped properties from the backing
 dataset, and for each join-table link the join dataset.
 

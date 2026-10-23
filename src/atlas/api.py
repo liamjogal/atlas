@@ -2,7 +2,6 @@
 
 Routes are not written per object type. They are driven by the registry, so
 adding an object type to ontology.yaml makes it queryable with no code changes.
-(The shape loosely follows Palantir's Ontology API v2.)
 
 The API only reads. It serves the Postgres object store that `atlas worker` keeps
 indexed, holds no lock on the pipeline's DuckDB file, and so can run as many

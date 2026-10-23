@@ -1,6 +1,6 @@
 """Ontology registry: loads ontology.yaml into typed definitions and checks them.
 
-Validation runs in two stages, as it does in Foundry:
+Validation runs in two stages:
   1. Internal consistency (links point at real object types, keys are real properties).
   2. Against the data (every backing dataset and column exists with a compatible type).
 """

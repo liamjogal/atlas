@@ -52,7 +52,7 @@ def cmd_serve(args) -> None:
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
-    parser = argparse.ArgumentParser(prog="atlas", description="A mini Palantir-style ontology platform")
+    parser = argparse.ArgumentParser(prog="atlas", description="An ontology platform for live disaster response")
     sub = parser.add_subparsers(required=True)
 
     sync = sub.add_parser("sync", help="Run one cycle: pull sources, rebuild datasets, index objects")

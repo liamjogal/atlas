@@ -100,7 +100,7 @@ def read_last_sync_file() -> dict | None:
 
 
 def run_worker(every_seconds: int) -> None:
-    """Sync now, then every `every_seconds`, until interrupted (a tiny stand-in for Foundry schedules)."""
+    """Sync now, then every `every_seconds`, until interrupted (a minimal scheduler)."""
     log.info("worker started: syncing every %s s", every_seconds)
     while True:
         started = time.monotonic()

@@ -1,7 +1,7 @@
 [project]
 name = "atlas"
 version = "0.1.0"
-description = "A mini Palantir-style ontology platform, applied to disaster response"
+description = "An ontology platform applied to disaster response"
 authors = [
     { name = "liamjogal", email = "liamjogal@gmail.com" }
 ]

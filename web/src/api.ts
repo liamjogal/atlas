@@ -1,5 +1,5 @@
 // Typed client for the Atlas Ontology API. The app never talks to tables, only to
-// object types, links and object sets, exactly like an OSDK client would.
+// object types, links and object sets, like a generated SDK client would.
 
 export type PropertyType = 'string' | 'integer' | 'double' | 'boolean' | 'timestamp'
 
