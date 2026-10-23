@@ -1,0 +1,12 @@
+# Never send data, secrets or local environments into the image build.
+data/
+.env
+.env.*
+**/.env
+.venv/
+.git/
+.claude/
+web/node_modules/
+web/dist/
+**/__pycache__/
+.pytest_cache/

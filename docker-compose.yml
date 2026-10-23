@@ -1,0 +1,58 @@
+# Atlas in containers: Postgres, the sync worker (the only writer) and the read-only API.
+#
+#   docker compose up --build          # http://localhost:8000
+#
+# Secrets (e.g. NASA_FIRMS_API_KEY) are read from .env files at run time, never baked in.
+# The first facility build downloads the ~12 GB US extract into the atlas-data volume
+# (set ATLAS_OSM_REGIONS to a single state to try it small).
+
+x-atlas: &atlas
+  image: atlas
+  env_file:
+    - path: .env
+      required: false
+    - path: src/atlas/.env
+      required: false
+  environment:
+    # Local default credentials; use real secrets in any shared deployment.
+    DATABASE_URL: postgresql://atlas:atlas@postgres:5432/atlas
+    ATLAS_DATA_DIR: /data
+    ATLAS_OSM_REGIONS: ${ATLAS_OSM_REGIONS:-north-america/us,north-america/us/puerto-rico}
+  depends_on:
+    postgres:
+      condition: service_healthy
+
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: atlas
+      POSTGRES_PASSWORD: atlas
+      POSTGRES_DB: atlas
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U atlas -d atlas"]
+      interval: 5s
+      retries: 20
+
+  worker:
+    <<: *atlas
+    build: .   # the worker builds the image; the api reuses it
+    command: ["atlas", "worker"]
+    volumes:
+      - atlas-data:/data
+    restart: unless-stopped
+
+  api:
+    <<: *atlas
+    pull_policy: never
+    command: ["atlas", "serve", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "${ATLAS_PORT:-8000}:8000"
+    # The API refuses to start until the worker has built the first index; retry until it has.
+    restart: on-failure
+
+volumes:
+  pgdata:
+  atlas-data:
