@@ -9,6 +9,8 @@ import type { FeatureCollection } from 'geojson'
 import countiesTopo from 'us-atlas/counties-10m.json'
 import type { OntologyObject } from '../api'
 import { SEVERITY } from '../format'
+import { WebglHint } from './ErrorBoundary'
+import { webglSupported } from './webgl'
 
 export interface Selection {
   objectType: string
@@ -75,7 +77,21 @@ function quakeCollection(quakes: OntologyObject[]): FeatureCollection {
   }
 }
 
-export function HazardMap({ counties, quakes, selected, onSelect, focus }: Props) {
+export function HazardMap(props: Props) {
+  if (!webglSupported) {
+    return (
+      <div className="map-wrap">
+        <div className="failure" role="alert">
+          <strong>The map could not load: this browser has WebGL turned off.</strong>
+          <WebglHint />
+        </div>
+      </div>
+    )
+  }
+  return <MapCanvas {...props} />
+}
+
+function MapCanvas({ counties, quakes, selected, onSelect, focus }: Props) {
   const container = useRef<HTMLDivElement>(null)
   const mapRef = useRef<MapLibre | null>(null)
   const onSelectRef = useRef(onSelect)

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api, type Health, type OntologyDef } from './api'
 import { relativeTime } from './format'
+import { ErrorBoundary } from './components/ErrorBoundary'
 import { ObjectExplorer } from './components/ObjectExplorer'
 import { OperatingPicture } from './components/OperatingPicture'
 
@@ -62,8 +63,10 @@ export default function App() {
       </header>
 
       {error && <p className="error page-error">Could not reach the Atlas API: {error}. Is `uv run atlas serve` running?</p>}
-      {ontology && tab === 'picture' && <OperatingPicture ontology={ontology} refreshKey={refreshKey} />}
-      {ontology && tab === 'explorer' && <ObjectExplorer ontology={ontology} refreshKey={refreshKey} />}
+      <ErrorBoundary key={tab} label="This view">
+        {ontology && tab === 'picture' && <OperatingPicture ontology={ontology} refreshKey={refreshKey} />}
+        {ontology && tab === 'explorer' && <ObjectExplorer ontology={ontology} refreshKey={refreshKey} />}
+      </ErrorBoundary>
     </div>
   )
 }

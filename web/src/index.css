@@ -102,6 +102,12 @@ code { font-family: ui-monospace, Menlo, monospace; }
 
 .card { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; }
 
+.failure {
+  margin: 24px; padding: 16px; border: 1px solid var(--critical); border-radius: var(--radius);
+  background: rgba(208, 59, 59, 0.08); display: flex; flex-direction: column; gap: 8px; max-width: 560px;
+}
+.failure code { font-size: 12px; color: var(--text-2); overflow-wrap: anywhere; }
+
 /* Charts */
 .chart { position: relative; }
 .chart svg { display: block; }
@@ -191,7 +197,11 @@ tbody tr.selected { background: rgba(57, 135, 229, 0.12); }
 .pager { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 8px; border-top: 1px solid var(--border); }
 
 @media (max-width: 900px) {
-  .picture, .explorer { grid-template-columns: 1fr; grid-auto-rows: minmax(360px, 1fr); overflow-y: auto; }
+  /* Stacked: the map gets a fixed share of the screen and the panel scrolls below it. */
+  .picture, .explorer { grid-template-columns: 1fr; grid-template-rows: 55vh auto; overflow-y: auto; }
+  .panel { border-left: 0; border-top: 1px solid var(--border); overflow-y: visible; }
   .type-list { display: none; }
   .brand-sub { display: none; }
+  .map-legend { bottom: 8px; left: 8px; padding: 6px 8px; font-size: 11px; }
+  .legend-row { line-height: 16px; }
 }

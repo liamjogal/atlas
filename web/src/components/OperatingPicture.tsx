@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api, where, type AggregateRow, type OntologyDef, type OntologyObject, type Step } from '../api'
 import { SEVERITY, relativeTime } from '../format'
 import { RankedBars, StatTile, TimeBars, type BarDatum } from './Charts'
+import { ErrorBoundary, WebglHint } from './ErrorBoundary'
 import { HazardMap, type Selection } from './HazardMap'
 import { ObjectSummary, ObjectView } from './ObjectView'
 
@@ -144,13 +145,15 @@ export function OperatingPicture({ ontology, refreshKey }: { ontology: OntologyD
 
   return (
     <div className="picture">
-      <HazardMap
-        counties={data?.counties ?? []}
-        quakes={data?.quakes ?? []}
-        selected={selected}
-        onSelect={(s) => setHistory([s])}
-        focus={focus}
-      />
+      <ErrorBoundary label="The map" hint={<WebglHint />}>
+        <HazardMap
+          counties={data?.counties ?? []}
+          quakes={data?.quakes ?? []}
+          selected={selected}
+          onSelect={(s) => setHistory([s])}
+          focus={focus}
+        />
+      </ErrorBoundary>
 
       <aside className="panel">
         {selected ? (
