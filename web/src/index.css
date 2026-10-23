@@ -205,3 +205,19 @@ tbody tr.selected { background: rgba(57, 135, 229, 0.12); }
   .map-legend { bottom: 8px; left: 8px; padding: 6px 8px; font-size: 11px; }
   .legend-row { line-height: 16px; }
 }
+
+/* Facility toggles (top right of the map) */
+.facility-toggles {
+  position: absolute; right: 12px; top: 12px;
+  background: rgba(26, 26, 25, 0.92); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 10px 12px; font-size: 12px; color: var(--text-2);
+}
+.legend-row.toggle { cursor: pointer; }
+.legend-row.toggle input { margin: 0 2px 0 0; accent-color: var(--series-1); }
+.facility-badge {
+  display: inline-grid; place-items: center; width: 16px; height: 16px; border-radius: 50%;
+  background: #e1e0d9; color: #0d0d0d; font-size: 10px; font-weight: 700;
+}
+@media (max-width: 900px) {
+  .facility-toggles { top: 8px; right: 8px; padding: 6px 8px; font-size: 11px; }
+}

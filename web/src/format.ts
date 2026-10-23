@@ -57,4 +57,25 @@ export const DEFAULT_ORDER: Record<string, { orderBy: string; desc: boolean }> =
   Earthquake: { orderBy: 'occurred_at', desc: true },
   WeatherAlert: { orderBy: 'sent_at', desc: true },
   County: { orderBy: 'active_alert_count', desc: true },
+  Facility: { orderBy: 'name', desc: false },
+  FireDetection: { orderBy: 'detected_at', desc: true },
+}
+
+// Facility kinds are told apart by a letter on the map, never by colour alone.
+export const FACILITY_KINDS: Record<string, { letter: string; label: string }> = {
+  hospital: { letter: 'H', label: 'Hospitals' },
+  shelter: { letter: 'S', label: 'Shelters' },
+  fire_station: { letter: 'F', label: 'Fire stations' },
+  school: { letter: 'E', label: 'Schools' },
+}
+
+// Facilities only make sense (and only load) once the map is zoomed in to city scale.
+export const FACILITY_MIN_ZOOM = 7
+
+export const formatPopulation = (n: unknown) => {
+  const v = Number(n)
+  if (!Number.isFinite(v)) return '—'
+  if (v >= 1e6) return `${(v / 1e6).toFixed(1)}M`
+  if (v >= 1e3) return `${Math.round(v / 1e3)}k`
+  return v.toLocaleString()
 }

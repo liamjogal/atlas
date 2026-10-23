@@ -28,6 +28,14 @@ export function ObjectSummary({ obj }: { obj: OntologyObject }) {
       )
     case 'WeatherAlert':
       return <SeverityBadge severity={obj.severity} />
+    case 'Facility':
+      return <span className="muted">{humanize(String(obj.kind))}{obj.emergency ? ' · emergency' : ''}</span>
+    case 'FireDetection':
+      return (
+        <span className="muted">
+          {Number(obj.frp ?? 0).toFixed(0)} MW · {relativeTime(obj.detected_at as string)}
+        </span>
+      )
     case 'County':
       return (
         <span className="muted">

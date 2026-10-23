@@ -25,13 +25,15 @@ CREATE SCHEMA clean;
 CREATE TABLE clean.counties (
     geoid VARCHAR, name VARCHAR, state VARCHAR, land_area_sqmi DOUBLE, latitude DOUBLE, longitude DOUBLE,
     active_alert_count INTEGER, max_alert_severity VARCHAR, max_alert_severity_rank INTEGER,
-    recent_quake_count BIGINT, max_quake_magnitude DOUBLE
+    recent_quake_count BIGINT, max_quake_magnitude DOUBLE, population BIGINT,
+    hospital_count BIGINT, shelter_count BIGINT, fire_station_count BIGINT, school_count BIGINT,
+    active_fire_count BIGINT
 );
 INSERT INTO clean.counties VALUES
-    ('06025', 'Imperial County',  'CA', 4177.0, 33.04, -115.35, 2, 'Severe',   3, 3, 2.1),
-    ('06037', 'Los Angeles County','CA', 4058.0, 34.32, -118.22, 1, 'Moderate', 2, 1, 1.9),
-    ('02016', 'Aleutians West',   'AK', 4390.0, 52.0,  -174.2,  0, NULL,       0, 1, 4.2),
-    ('48001', 'anderson County',  'TX', 1062.6, 31.81, -95.65,  1, 'Extreme',  4, 0, NULL);
+    ('06025', 'Imperial County',  'CA', 4177.0, 33.04, -115.35, 2, 'Severe',   3, 3, 2.1,  179057,  1, 0, 0, 1, 1),
+    ('06037', 'Los Angeles County','CA', 4058.0, 34.32, -118.22, 1, 'Moderate', 2, 1, 1.9,  9663345, 0, 1, 1, 0, 0),
+    ('02016', 'Aleutians West',   'AK', 4390.0, 52.0,  -174.2,  0, NULL,       0, 1, 4.2,  5232,    0, 0, 0, 0, 0),
+    ('48001', 'anderson County',  'TX', 1062.6, 31.81, -95.65,  1, 'Extreme',  4, 0, NULL, NULL,    0, 0, 0, 0, 1);
 
 CREATE TABLE clean.earthquakes (
     event_id VARCHAR, magnitude DOUBLE, place VARCHAR, occurred_at TIMESTAMPTZ, updated_at TIMESTAMPTZ,
@@ -58,6 +60,27 @@ INSERT INTO clean.weather_alerts VALUES
      '2026-10-22 18:00:00+00', '2026-10-22 18:00:00+00', '2026-10-23 06:00:00+00', 'Windy.', NULL),
     ('a3', 'Tornado Warning', 'Tornado Warning for Anderson County', 'Extreme', 'Immediate', 'Observed', 'Anderson', 'NWS Fort Worth',
      '2026-10-23 01:00:00+00', '2026-10-23 01:00:00+00', '2026-10-23 01:45:00+00', 'Take cover.', 'Go to a basement.');
+
+CREATE TABLE clean.facilities (
+    facility_id VARCHAR, osm_id VARCHAR, kind VARCHAR, name VARCHAR, latitude DOUBLE, longitude DOUBLE,
+    county_geoid VARCHAR, address VARCHAR, operator VARCHAR, capacity BIGINT, emergency BOOLEAN
+);
+INSERT INTO clean.facilities VALUES
+    ('hospital/way/1', 'way/1', 'hospital', 'El Centro Regional Medical Center', 32.79, -115.56, '06025',
+     '1415 Ross Ave, El Centro, CA', 'City of El Centro', 161, true),
+    ('school/node/2', 'node/2', 'school', 'Unnamed school', 32.85, -115.57, '06025', NULL, NULL, NULL, false),
+    ('fire_station/node/3', 'node/3', 'fire_station', 'LA County Fire Station 88', 34.15, -118.45, '06037',
+     NULL, 'LA County Fire', NULL, false),
+    ('shelter/node/3', 'node/3', 'shelter', 'LA County Fire Station 88', 34.15, -118.45, '06037',
+     NULL, NULL, 40, false);
+
+CREATE TABLE clean.fire_detections (
+    detection_id VARCHAR, label VARCHAR, latitude DOUBLE, longitude DOUBLE, detected_at TIMESTAMPTZ,
+    satellite VARCHAR, confidence VARCHAR, frp DOUBLE, day_night VARCHAR, county_geoid VARCHAR
+);
+INSERT INTO clean.fire_detections VALUES
+    ('f1', 'Fire detection Oct 22 21:30 UTC', 32.9, -115.2, '2026-10-22 21:30:00+00', 'N', 'nominal', 12.5, 'D', '06025'),
+    ('f2', 'Fire detection Oct 23 08:10 UTC', 31.8, -95.6, '2026-10-23 08:10:00+00', 'N', 'high', 48.0, 'N', '48001');
 
 CREATE TABLE clean.alert_counties (alert_id VARCHAR, geoid VARCHAR);
 INSERT INTO clean.alert_counties VALUES ('a1', '06025'), ('a2', '06037'), ('a2', '06025'), ('a3', '48001');

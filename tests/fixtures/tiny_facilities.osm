@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- A hand-made OSM file for the osmium end-to-end test. osmium needs nodes, then ways,
+     each sorted by id. Coordinates sit inside the two unit-square test "counties". -->
+<osm version="0.6" generator="atlas-tests">
+  <node id="1" version="1" lat="0.5" lon="0.5"><tag k="amenity" v="hospital"/><tag k="name" v="Center Hospital"/><tag k="emergency" v="yes"/><tag k="beds" v="120"/><tag k="addr:housenumber" v="1"/><tag k="addr:street" v="Main St"/></node>
+  <node id="2" version="1" lat="0.7" lon="1.7"><tag k="amenity" v="school"/><tag k="social_facility" v="shelter"/><tag k="name" v="Gym Shelter School"/><tag k="capacity" v="about 50"/></node>
+  <node id="3" version="1" lat="0.6" lon="0.6"><tag k="amenity" v="cafe"/><tag k="name" v="Not A Facility"/></node>
+  <node id="10" version="1" lat="0.2" lon="1.2"/>
+  <node id="11" version="1" lat="0.2" lon="1.4"/>
+  <node id="12" version="1" lat="0.4" lon="1.4"/>
+  <node id="13" version="1" lat="0.4" lon="1.2"/>
+  <way id="20" version="1"><nd ref="10"/><nd ref="11"/><nd ref="12"/><nd ref="13"/><nd ref="10"/><tag k="amenity" v="school"/><tag k="building" v="school"/></way>
+</osm>

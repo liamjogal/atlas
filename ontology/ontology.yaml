@@ -22,6 +22,12 @@ object_types:
       max_alert_severity_rank: {type: integer, description: 0 none, 1 Minor ... 4 Extreme}
       recent_quake_count: {type: integer, description: Earthquakes linked to this county in the past 7 days}
       max_quake_magnitude: {type: double}
+      population: {type: integer, description: Census 2024 population estimate}
+      hospital_count: {type: integer}
+      shelter_count: {type: integer}
+      fire_station_count: {type: integer}
+      school_count: {type: integer}
+      active_fire_count: {type: integer, description: Satellite fire detections in the past 24 hours}
 
   Earthquake:
     description: A seismic event detected by the USGS network (live feed, past 7 days).
@@ -41,7 +47,7 @@ object_types:
       tsunami_flag: {type: boolean}
       pager_alert: {type: string, description: USGS PAGER impact level (green/yellow/orange/red)}
       review_status: {type: string, description: automatic or reviewed}
-      county_geoid: {type: string, description: Nearest US county within 100 km, if any}
+      county_geoid: {type: string, description: County containing the epicentre; offshore or across the border, the nearest US county within 100 km (the one that feels it)}
       distance_to_county_km: {type: double}
       url: {type: string}
 
@@ -65,6 +71,41 @@ object_types:
       description: {type: string}
       instruction: {type: string}
 
+  Facility:
+    description: A hospital, shelter, fire station or school (OpenStreetMap, refreshed daily).
+    backing_dataset: clean.facilities
+    primary_key: facility_id
+    title_property: name
+    properties:
+      facility_id: {type: string, description: kind + OSM id, e.g. hospital/way/123}
+      osm_id: {type: string}
+      kind: {type: string, description: hospital, shelter, fire_station or school}
+      name: {type: string}
+      latitude: {type: double}
+      longitude: {type: double}
+      county_geoid: {type: string, description: County containing the facility}
+      address: {type: string}
+      operator: {type: string}
+      capacity: {type: integer, description: Beds or capacity where OSM records it}
+      emergency: {type: boolean, description: Hospital has an emergency department}
+
+  FireDetection:
+    description: A satellite fire detection from NASA FIRMS (VIIRS, past 7 days).
+    backing_dataset: clean.fire_detections
+    primary_key: detection_id
+    title_property: label
+    properties:
+      detection_id: {type: string}
+      label: {type: string}
+      latitude: {type: double}
+      longitude: {type: double}
+      detected_at: {type: timestamp}
+      satellite: {type: string}
+      confidence: {type: string, description: low, nominal or high}
+      frp: {type: double, description: Fire radiative power (MW), a measure of intensity}
+      day_night: {type: string}
+      county_geoid: {type: string}
+
 link_types:
   # Foreign-key link: each Earthquake row stores the key of its County.
   - api_name: earthquakeCounty
@@ -85,3 +126,19 @@ link_types:
     join_dataset: clean.alert_counties
     join_source_key: alert_id
     join_target_key: geoid
+
+  - api_name: facilityCounty
+    source: Facility
+    target: County
+    source_side_name: county
+    target_side_name: facilities
+    cardinality: many_to_one
+    foreign_key: county_geoid
+
+  - api_name: fireDetectionCounty
+    source: FireDetection
+    target: County
+    source_side_name: county
+    target_side_name: fireDetections
+    cardinality: many_to_one
+    foreign_key: county_geoid

@@ -10,6 +10,7 @@ dependencies = [
     "duckdb>=1.5.6",
     "fastapi>=0.142.2",
     "httpx>=0.28.1",
+    "osmium>=4.3.2",
     "psycopg[binary,pool]>=3.3.6",
     "pydantic>=2.13.5",
     "pytz>=2026.5",

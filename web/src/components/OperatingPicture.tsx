@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { api, where, type AggregateRow, type OntologyDef, type OntologyObject, type Step } from '../api'
-import { SEVERITY, relativeTime } from '../format'
+import { api, searchAround, where, type AggregateRow, type OntologyDef, type OntologyObject, type Step } from '../api'
+import { FACILITY_MIN_ZOOM, SEVERITY, formatPopulation, relativeTime } from '../format'
 import { RankedBars, StatTile, TimeBars, type BarDatum } from './Charts'
 import { ErrorBoundary, WebglHint } from './ErrorBoundary'
-import { HazardMap, type Selection } from './HazardMap'
+import { HazardMap, type Selection, type Viewport } from './HazardMap'
 import { ObjectSummary, ObjectView } from './ObjectView'
 
 const MAGNITUDES = [
@@ -23,7 +23,14 @@ interface PictureData {
   alertTypes: AggregateRow[]
   alertSeverities: AggregateRow[]
   hotspots: OntologyObject[]
+  fires: OntologyObject[]
+  peopleUnderSevere: number
+  severeCountyCount: number
+  hospitalsUnderSevere: number
 }
+
+// "Severe" here means the county's worst active alert is Severe or Extreme.
+const SEVERE_COUNTIES: Step[] = [where('max_alert_severity_rank', 'gte', SEVERITY.Severe.rank)]
 
 function quakeSteps(minMag: number, hours: number): Step[] {
   const since = new Date(Date.now() - hours * 3_600_000).toISOString()
@@ -34,7 +41,8 @@ function quakeSteps(minMag: number, hours: number): Step[] {
 
 async function loadPicture(minMag: number, hours: number): Promise<PictureData> {
   const steps = quakeSteps(minMag, hours)
-  const [counties, quakes, quakeBuckets, alertTypes, alertSeverities, hotspots] = await Promise.all([
+  const firesSince = new Date(Date.now() - 24 * 3_600_000).toISOString()
+  const [counties, quakes, quakeBuckets, alertTypes, alertSeverities, hotspots, fires, severePeople, severeHospitals] = await Promise.all([
     api.load({ object_type: 'County', steps: [where('active_alert_count', 'gt', 0)], limit: 5000 }),
     api.load({ object_type: 'Earthquake', steps, order_by: 'magnitude', desc: true, limit: 5000 }),
     api.aggregate({
@@ -49,9 +57,17 @@ async function loadPicture(minMag: number, hours: number): Promise<PictureData> 
     api.load({
       object_type: 'County',
       steps: [where('active_alert_count', 'gt', 0), where('recent_quake_count', 'gt', 0)],
-      order_by: 'max_alert_severity_rank',
+      order_by: 'population',
       desc: true,
       limit: 50,
+    }),
+    api.load({ object_type: 'FireDetection', steps: [where('detected_at', 'gte', firesSince)], limit: 5000 }),
+    api.aggregate({ object_type: 'County', steps: SEVERE_COUNTIES, metrics: [{ op: 'sum', property: 'population' }] }),
+    // Object sets compose across links: severe counties -> their facilities -> just the hospitals.
+    api.load({
+      object_type: 'County',
+      steps: [...SEVERE_COUNTIES, searchAround('facilities'), where('kind', 'eq', 'hospital')],
+      limit: 1,
     }),
   ])
   return {
@@ -61,6 +77,10 @@ async function loadPicture(minMag: number, hours: number): Promise<PictureData> 
     alertTypes: alertTypes.data,
     alertSeverities: alertSeverities.data,
     hotspots: hotspots.data,
+    fires: fires.data,
+    peopleUnderSevere: severePeople.data[0]?.metrics.sum_population ?? 0,
+    severeCountyCount: severePeople.data[0]?.count ?? 0,
+    hospitalsUnderSevere: severeHospitals.total,
   }
 }
 
@@ -99,7 +119,14 @@ function bucketBars(rows: AggregateRow[], hours: number): BarDatum[] {
   })
 }
 
-export function OperatingPicture({ ontology, refreshKey }: { ontology: OntologyDef; refreshKey: string }) {
+interface Props {
+  ontology: OntologyDef
+  refreshKey: string
+  /** What each connector reported on the last sync (e.g. whether FIRMS is configured). */
+  sources: Record<string, string>
+}
+
+export function OperatingPicture({ ontology, refreshKey, sources }: Props) {
   const [minMag, setMinMag] = useState(2.5)
   const [hours, setHours] = useState(168)
   const [data, setData] = useState<PictureData | null>(null)
@@ -107,6 +134,31 @@ export function OperatingPicture({ ontology, refreshKey }: { ontology: OntologyD
   const [history, setHistory] = useState<Selection[]>([])
   const [focus, setFocus] = useState<{ lng: number; lat: number; zoom: number } | null>(null)
   const selected = history.at(-1) ?? null
+  const [viewport, setViewport] = useState<Viewport | null>(null)
+  const [facilities, setFacilities] = useState<OntologyObject[]>([])
+
+  // Facilities load for the visible area only, once zoomed in to city scale.
+  const zoomedIn = (viewport?.zoom ?? 0) >= FACILITY_MIN_ZOOM
+  useEffect(() => {
+    if (!viewport || !zoomedIn) return
+    let cancelled = false
+    api
+      .load({
+        object_type: 'Facility',
+        steps: [
+          where('latitude', 'gte', viewport.south),
+          where('latitude', 'lte', viewport.north),
+          where('longitude', 'gte', viewport.west),
+          where('longitude', 'lte', viewport.east),
+        ],
+        limit: 5000,
+      })
+      .then((r) => !cancelled && setFacilities(r.data))
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [viewport, zoomedIn, refreshKey])
 
   useEffect(() => {
     let cancelled = false
@@ -149,8 +201,11 @@ export function OperatingPicture({ ontology, refreshKey }: { ontology: OntologyD
         <HazardMap
           counties={data?.counties ?? []}
           quakes={data?.quakes ?? []}
+          fires={data?.fires ?? []}
+          facilities={zoomedIn ? facilities : []}
           selected={selected}
           onSelect={(s) => setHistory([s])}
+          onViewport={setViewport}
           focus={focus}
         />
       </ErrorBoundary>
@@ -191,7 +246,17 @@ export function OperatingPicture({ ontology, refreshKey }: { ontology: OntologyD
             {data && stats && (
               <>
                 <div className="stats">
-                  <StatTile label="Counties under alert" value={stats.countiesUnderAlert.toLocaleString()} />
+                  <StatTile
+                    label="People under severe alerts"
+                    accent={SEVERITY.Severe.color}
+                    value={formatPopulation(data.peopleUnderSevere)}
+                    note={`${data.severeCountyCount} counties · ${stats.countiesUnderAlert} under any alert`}
+                  />
+                  <StatTile
+                    label="Hospitals in those counties"
+                    value={data.hospitalsUnderSevere.toLocaleString()}
+                    note="From OpenStreetMap"
+                  />
                   <StatTile
                     label="Severe or extreme alerts"
                     accent={SEVERITY.Severe.color}
@@ -204,6 +269,11 @@ export function OperatingPicture({ ontology, refreshKey }: { ontology: OntologyD
                     value={stats.largest ? `M${Number(stats.largest.magnitude).toFixed(1)}` : '—'}
                     note={stats.largest ? (stats.largest.place as string) : undefined}
                   />
+                  <StatTile
+                    label="Active fires, 24 hours"
+                    value={sources.firms_fires?.startsWith('skipped') ? '—' : data.fires.length.toLocaleString()}
+                    note={sources.firms_fires?.startsWith('skipped') ? 'Set NASA_FIRMS_API_KEY to enable' : 'Satellite detections'}
+                  />
                 </div>
 
                 <section className="card">
@@ -213,7 +283,7 @@ export function OperatingPicture({ ontology, refreshKey }: { ontology: OntologyD
 
                 <section className="card">
                   <h3>
-                    Hotspots <span className="muted">· recent quake and active alert</span>
+                    Hotspots <span className="muted">· recent quake and active alert, most people first</span>
                   </h3>
                   {data.hotspots.length === 0 && <p className="muted small">No county has both right now.</p>}
                   <ul className="link-list">
@@ -234,7 +304,7 @@ export function OperatingPicture({ ontology, refreshKey }: { ontology: OntologyD
                               <span className="swatch" style={{ background: SEVERITY[c.max_alert_severity as keyof typeof SEVERITY]?.color }} />
                               {c.max_alert_severity as string}
                             </span>
-                            <span className="muted"> · M{Number(c.max_quake_magnitude).toFixed(1)} max</span>
+                            <span className="muted"> · {formatPopulation(c.population)} people · M{Number(c.max_quake_magnitude).toFixed(1)}</span>
                           </span>
                         </button>
                       </li>

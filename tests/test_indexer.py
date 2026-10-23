@@ -12,7 +12,10 @@ def test_reindex_swaps_cleanly(ontology, duck, pg_url):
         first = build_index(ontology, duck, conn)
         second = build_index(ontology, duck, conn)
 
-        assert first == second == {"County": 4, "Earthquake": 6, "WeatherAlert": 3, "weatherAlertCounty": 4}
+        assert first == second == {
+            "County": 4, "Earthquake": 6, "WeatherAlert": 3, "Facility": 4, "FireDetection": 2,
+            "weatherAlertCounty": 4,
+        }
         # Only the live index remains: no staging or old schema left behind.
         assert "ontology" in schemas(conn)
         assert not {"ontology_staging", "ontology_old"} & schemas(conn)

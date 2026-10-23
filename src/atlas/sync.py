@@ -100,8 +100,17 @@ def read_last_sync_file() -> dict | None:
 
 
 def run_worker(every_seconds: int) -> None:
-    """Sync now, then every `every_seconds`, until interrupted (a minimal scheduler)."""
+    """Sync now, then every `every_seconds`, until interrupted (a minimal scheduler).
+
+    Facilities refresh weekly in a background thread, so their slow downloads never
+    delay the live feeds; each cycle's pipeline picks up whatever has landed.
+    """
+    import threading
+
+    from atlas.connectors import geofabrik
+
     log.info("worker started: syncing every %s s", every_seconds)
+    threading.Thread(target=geofabrik.run_refresher, args=(threading.Event(),), daemon=True).start()
     while True:
         started = time.monotonic()
         try:

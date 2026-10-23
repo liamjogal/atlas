@@ -18,6 +18,13 @@ def cmd_index(args) -> None:
     print(json.dumps(run_sync(pull=False), indent=2))
 
 
+def cmd_facilities(args) -> None:
+    from atlas.connectors import geofabrik
+
+    print(json.dumps(geofabrik.refresh_due(force=args.force), indent=2))
+    print("Run `uv run atlas index` (or let the worker cycle) to load them into the object store.")
+
+
 def cmd_worker(args) -> None:
     from atlas.sync import run_worker
 
@@ -52,6 +59,8 @@ def cmd_serve(args) -> None:
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
+    # httpx logs full request URLs at INFO, and some (FIRMS) carry an API key.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     parser = argparse.ArgumentParser(prog="atlas", description="An ontology platform for live disaster response")
     sub = parser.add_subparsers(required=True)
 
@@ -60,6 +69,10 @@ def main() -> None:
 
     index = sub.add_parser("index", help="Rebuild datasets and re-index objects from already-landed data")
     index.set_defaults(func=cmd_index)
+
+    facilities = sub.add_parser("facilities", help="Build OSM facilities from Geofabrik extracts now (first run downloads ~12 GB)")
+    facilities.add_argument("--force", action="store_true", help="Refresh every region, even if fresh")
+    facilities.set_defaults(func=cmd_facilities)
 
     worker = sub.add_parser("worker", help="Run sync cycles on a schedule (the only process that writes)")
     worker.add_argument("--every", type=int, default=300, metavar="SECONDS",

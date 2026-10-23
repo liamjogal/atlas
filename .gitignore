@@ -11,3 +11,8 @@ wheels/
 
 # Local data (landing files + DuckDB)
 data/
+
+# Secrets (API keys) never go in git
+.env
+.env.*
+!.env.example

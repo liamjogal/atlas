@@ -64,7 +64,7 @@ export default function App() {
 
       {error && <p className="error page-error">Could not reach the Atlas API: {error}. Is `uv run atlas serve` running?</p>}
       <ErrorBoundary key={tab} label="This view">
-        {ontology && tab === 'picture' && <OperatingPicture ontology={ontology} refreshKey={refreshKey} />}
+        {ontology && tab === 'picture' && <OperatingPicture ontology={ontology} refreshKey={refreshKey} sources={health?.last_sync?.sources ?? {}} />}
         {ontology && tab === 'explorer' && <ObjectExplorer ontology={ontology} refreshKey={refreshKey} />}
       </ErrorBoundary>
     </div>

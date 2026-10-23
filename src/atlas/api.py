@@ -189,14 +189,9 @@ def create_app() -> FastAPI:
 
         return run(query)
 
-    @app.get("/api/objects/{object_type}/{primary_key}")
-    def get_object(request: Request, object_type: str, primary_key: str):
-        obj = run(lambda: store(request).get(object_type, primary_key))
-        if obj is None:
-            raise HTTPException(404, f"{object_type} '{primary_key}' not found")
-        return obj
-
-    @app.get("/api/objects/{object_type}/{primary_key}/links/{link_name}")
+    # Primary keys may contain "/" (e.g. Facility "hospital/way/123"), so they match as paths.
+    # The links route is declared first so ".../links/<name>" isn't swallowed by get_object.
+    @app.get("/api/objects/{object_type}/{primary_key:path}/links/{link_name}")
     def get_linked(
         request: Request,
         object_type: str,
@@ -209,6 +204,13 @@ def create_app() -> FastAPI:
         return run(lambda: {"data": store(request).linked(
             object_type, primary_key, link_name, order_by=order_by, descending=desc, limit=limit,
         )})
+
+    @app.get("/api/objects/{object_type}/{primary_key:path}")
+    def get_object(request: Request, object_type: str, primary_key: str):
+        obj = run(lambda: store(request).get(object_type, primary_key))
+        if obj is None:
+            raise HTTPException(404, f"{object_type} '{primary_key}' not found")
+        return obj
 
     @app.post("/api/objectSets/load")
     def load_object_set(request: Request, body: ObjectSetRequest):

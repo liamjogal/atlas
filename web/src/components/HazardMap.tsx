@@ -8,7 +8,7 @@ import type { GeometryCollection, Topology } from 'topojson-specification'
 import type { FeatureCollection } from 'geojson'
 import countiesTopo from 'us-atlas/counties-10m.json'
 import type { OntologyObject } from '../api'
-import { SEVERITY } from '../format'
+import { FACILITY_KINDS, FACILITY_MIN_ZOOM, SEVERITY, relativeTime } from '../format'
 import { WebglHint } from './ErrorBoundary'
 import { webglSupported } from './webgl'
 
@@ -17,11 +17,22 @@ export interface Selection {
   pk: string
 }
 
+export interface Viewport {
+  west: number
+  south: number
+  east: number
+  north: number
+  zoom: number
+}
+
 interface Props {
   counties: OntologyObject[]
   quakes: OntologyObject[]
+  fires: OntologyObject[]
+  facilities: OntologyObject[]
   selected: Selection | null
   onSelect: (selection: Selection) => void
+  onViewport: (viewport: Viewport) => void
   focus: { lng: number; lat: number; zoom: number } | null
 }
 
@@ -29,6 +40,9 @@ setWorkerUrl(maplibreWorkerUrl)
 
 const BASEMAP = 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json'
 const QUAKE_BLUE = '#3987e5'
+// Fires get a hue of their own: the reds and oranges are reserved for alert severity.
+const FIRE_COLOR = '#d55181'
+const FACILITY_FILL = '#e1e0d9'
 
 const topo = countiesTopo as unknown as Topology<{ counties: GeometryCollection; states: GeometryCollection }>
 const countyShapes = feature(topo, topo.objects.counties) as FeatureCollection
@@ -77,6 +91,33 @@ function quakeCollection(quakes: OntologyObject[]): FeatureCollection {
   }
 }
 
+function fireCollection(fires: OntologyObject[]): FeatureCollection {
+  return {
+    type: 'FeatureCollection',
+    features: fires.map((f) => ({
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: [f.longitude as number, f.latitude as number] },
+      properties: { detection_id: f.detection_id, frp: f.frp ?? 0, detected_at: f.detected_at },
+    })),
+  }
+}
+
+function facilityCollection(facilities: OntologyObject[]): FeatureCollection {
+  return {
+    type: 'FeatureCollection',
+    features: facilities.map((f) => ({
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: [f.longitude as number, f.latitude as number] },
+      properties: {
+        facility_id: f.facility_id,
+        kind: f.kind,
+        name: f.name,
+        letter: FACILITY_KINDS[f.kind as string]?.letter ?? '?',
+      },
+    })),
+  }
+}
+
 export function HazardMap(props: Props) {
   if (!webglSupported) {
     return (
@@ -91,15 +132,19 @@ export function HazardMap(props: Props) {
   return <MapCanvas {...props} />
 }
 
-function MapCanvas({ counties, quakes, selected, onSelect, focus }: Props) {
+function MapCanvas({ counties, quakes, fires, facilities, selected, onSelect, onViewport, focus }: Props) {
   const container = useRef<HTMLDivElement>(null)
   const mapRef = useRef<MapLibre | null>(null)
   const onSelectRef = useRef(onSelect)
+  const onViewportRef = useRef(onViewport)
   const [loaded, setLoaded] = useState(false)
+  const [zoom, setZoom] = useState(0)
+  const [visibleKinds, setVisibleKinds] = useState<string[]>(Object.keys(FACILITY_KINDS))
 
   useEffect(() => {
     onSelectRef.current = onSelect
-  }, [onSelect])
+    onViewportRef.current = onViewport
+  }, [onSelect, onViewport])
 
   useEffect(() => {
     const map = new MapLibre({
@@ -108,6 +153,8 @@ function MapCanvas({ counties, quakes, selected, onSelect, focus }: Props) {
       bounds: [[-125, 24], [-66, 50]], // continental US
       fitBoundsOptions: { padding: 24 },
       attributionControl: { compact: true },
+      // Keep the view in the URL (#zoom/lat/lon) so any view can be bookmarked or shared.
+      hash: true,
     })
     mapRef.current = map
     map.on('error', (e) => console.error('Map error:', e.error))
@@ -117,6 +164,8 @@ function MapCanvas({ counties, quakes, selected, onSelect, focus }: Props) {
       map.addSource('counties', { type: 'geojson', data: empty, promoteId: 'geoid' })
       map.addSource('states', { type: 'geojson', data: stateLines })
       map.addSource('quakes', { type: 'geojson', data: empty })
+      map.addSource('fires', { type: 'geojson', data: empty })
+      map.addSource('facilities', { type: 'geojson', data: empty })
 
       const severityColor: unknown[] = ['match', ['get', 'rank']]
       for (const { rank, color } of Object.values(SEVERITY)) severityColor.push(rank, color)
@@ -151,6 +200,25 @@ function MapCanvas({ counties, quakes, selected, onSelect, focus }: Props) {
         paint: { 'line-color': '#ffffff', 'line-width': 2 },
       })
       map.addLayer({
+        id: 'fires',
+        type: 'circle',
+        source: 'fires',
+        layout: { 'circle-sort-key': ['get', 'frp'] },
+        paint: {
+          // Sized by fire radiative power (MW): how intensely it is burning. Small at national
+          // scale, where ~1,000 detections would otherwise blanket the map.
+          'circle-radius': [
+            'interpolate', ['linear'], ['zoom'],
+            3, ['interpolate', ['linear'], ['get', 'frp'], 0, 1.5, 50, 3, 200, 5],
+            8, ['interpolate', ['linear'], ['get', 'frp'], 0, 4, 50, 8, 200, 13],
+          ],
+          'circle-color': FIRE_COLOR,
+          'circle-opacity': 0.8,
+          'circle-stroke-color': '#1a1a19',
+          'circle-stroke-width': ['interpolate', ['linear'], ['zoom'], 3, 0, 6, 1],
+        },
+      })
+      map.addLayer({
         id: 'quakes',
         type: 'circle',
         source: 'quakes',
@@ -176,12 +244,58 @@ function MapCanvas({ counties, quakes, selected, onSelect, focus }: Props) {
           'circle-stroke-width': 2,
         },
       })
+      // Facilities: a light disc with a letter per kind, only at city scale.
+      // Reuse a font the basemap already serves, so the letters render without extra glyph requests.
+      const fontOf = (layer: { layout?: unknown }) => (layer.layout as Record<string, unknown> | undefined)?.['text-font']
+      const labelFont = (map.getStyle().layers.map(fontOf).find(Array.isArray) as string[] | undefined) ?? ['Open Sans Bold']
+      map.addLayer({
+        id: 'facilities',
+        type: 'circle',
+        source: 'facilities',
+        minzoom: FACILITY_MIN_ZOOM,
+        paint: {
+          'circle-radius': 8,
+          'circle-color': FACILITY_FILL,
+          'circle-stroke-color': '#1a1a19',
+          'circle-stroke-width': 1,
+        },
+      })
+      map.addLayer({
+        id: 'facility-letters',
+        type: 'symbol',
+        source: 'facilities',
+        minzoom: FACILITY_MIN_ZOOM,
+        layout: {
+          'text-field': ['get', 'letter'],
+          'text-font': labelFont,
+          'text-size': 10,
+          'text-allow-overlap': true,
+          'text-ignore-placement': true,
+        },
+        paint: { 'text-color': '#0d0d0d' },
+      })
+      map.addLayer({
+        id: 'point-selected',
+        type: 'circle',
+        source: 'facilities',
+        filter: ['==', ['get', 'facility_id'], ''],
+        paint: { 'circle-radius': 11, 'circle-color': 'transparent', 'circle-stroke-color': '#ffffff', 'circle-stroke-width': 2 },
+      })
       setLoaded(true)
+      reportViewport()
     })
+
+    const reportViewport = () => {
+      const b = map.getBounds()
+      setZoom(map.getZoom())
+      onViewportRef.current({ west: b.getWest(), south: b.getSouth(), east: b.getEast(), north: b.getNorth(), zoom: map.getZoom() })
+    }
+    map.on('moveend', reportViewport)
 
     let hovered: string | number | undefined
     const pick = (point: { x: number; y: number }): MapGeoJSONFeature | undefined => {
-      const [hit] = map.queryRenderedFeatures([point.x, point.y], { layers: ['quakes', 'county-hit'] })
+      const layers = ['facilities', 'quakes', 'fires', 'county-hit'].filter((id) => map.getLayer(id))
+      const [hit] = map.queryRenderedFeatures([point.x, point.y], { layers })
       return hit
     }
 
@@ -199,6 +313,10 @@ function MapCanvas({ counties, quakes, selected, onSelect, focus }: Props) {
       let html: string
       if (hit.layer.id === 'quakes') {
         html = `<strong>M${Number(p.magnitude).toFixed(1)}</strong> ${esc(p.place)}`
+      } else if (hit.layer.id === 'fires') {
+        html = `<strong>Fire detection</strong> ${relativeTime(p.detected_at)}<br/>Intensity ${Number(p.frp).toFixed(1)} MW`
+      } else if (hit.layer.id === 'facilities') {
+        html = `<strong>${esc(p.name)}</strong><br/>${esc(FACILITY_KINDS[p.kind]?.label.replace(/s$/, '') ?? p.kind)}`
       } else {
         hovered = p.geoid
         map.setFeatureState({ source: 'counties', id: p.geoid }, { hover: true })
@@ -211,8 +329,11 @@ function MapCanvas({ counties, quakes, selected, onSelect, focus }: Props) {
     map.on('click', (e) => {
       const hit = pick(e.point)
       if (!hit) return
-      if (hit.layer.id === 'quakes') onSelectRef.current({ objectType: 'Earthquake', pk: hit.properties.event_id })
-      else onSelectRef.current({ objectType: 'County', pk: hit.properties.geoid })
+      const p = hit.properties
+      if (hit.layer.id === 'quakes') onSelectRef.current({ objectType: 'Earthquake', pk: p.event_id })
+      else if (hit.layer.id === 'fires') onSelectRef.current({ objectType: 'FireDetection', pk: p.detection_id })
+      else if (hit.layer.id === 'facilities') onSelectRef.current({ objectType: 'Facility', pk: p.facility_id })
+      else onSelectRef.current({ objectType: 'County', pk: p.geoid })
     })
 
     return () => map.remove()
@@ -230,11 +351,29 @@ function MapCanvas({ counties, quakes, selected, onSelect, focus }: Props) {
 
   useEffect(() => {
     if (!loaded) return
+    ;(mapRef.current!.getSource('fires') as GeoJSONSource).setData(fireCollection(fires))
+  }, [loaded, fires])
+
+  useEffect(() => {
+    if (!loaded) return
+    ;(mapRef.current!.getSource('facilities') as GeoJSONSource).setData(facilityCollection(facilities))
+  }, [loaded, facilities])
+
+  useEffect(() => {
+    if (!loaded) return
+    const kindFilter = ['in', ['get', 'kind'], ['literal', visibleKinds]] as never
+    mapRef.current!.setFilter('facilities', kindFilter)
+    mapRef.current!.setFilter('facility-letters', kindFilter)
+  }, [loaded, visibleKinds])
+
+  useEffect(() => {
+    if (!loaded) return
     const map = mapRef.current!
     const county = selected?.objectType === 'County' ? selected.pk : ''
     const quake = selected?.objectType === 'Earthquake' ? selected.pk : ''
     map.setFilter('county-selected', ['==', ['get', 'geoid'], county])
     map.setFilter('quake-selected', ['==', ['get', 'event_id'], quake])
+    map.setFilter('point-selected', ['==', ['get', 'facility_id'], selected?.objectType === 'Facility' ? selected.pk : ''])
   }, [loaded, selected])
 
   useEffect(() => {
@@ -252,11 +391,33 @@ function MapCanvas({ counties, quakes, selected, onSelect, focus }: Props) {
             {name}
           </div>
         ))}
-        <div className="legend-title" style={{ marginTop: 8 }}>Earthquakes</div>
+        <div className="legend-title" style={{ marginTop: 8 }}>Earthquakes and fires</div>
         <div className="legend-row">
           <span className="swatch round" style={{ background: QUAKE_BLUE }} />
-          Size = magnitude, faded = older
+          Quake: size = magnitude, faded = older
         </div>
+        <div className="legend-row">
+          <span className="swatch round" style={{ background: FIRE_COLOR }} />
+          Fire (24 h): size = intensity
+        </div>
+      </div>
+      <div className="facility-toggles" role="group" aria-label="Facilities">
+        <div className="legend-title">
+          Facilities{zoom < FACILITY_MIN_ZOOM && <span className="muted"> · zoom in to show</span>}
+        </div>
+        {Object.entries(FACILITY_KINDS).map(([kind, { letter, label }]) => (
+          <label key={kind} className="legend-row toggle">
+            <input
+              type="checkbox"
+              checked={visibleKinds.includes(kind)}
+              onChange={(e) =>
+                setVisibleKinds((v) => (e.target.checked ? [...v, kind] : v.filter((k) => k !== kind)))
+              }
+            />
+            <span className="facility-badge" aria-hidden="true">{letter}</span>
+            {label}
+          </label>
+        ))}
       </div>
     </div>
   )

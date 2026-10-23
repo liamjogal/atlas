@@ -80,6 +80,11 @@ def create_indexes(ontology: Ontology, schema: str) -> list[str]:
                 f"CREATE INDEX ON {object_table(obj, schema)} "
                 f"USING gin ({q(obj.title_property)} gin_trgm_ops)"
             )
+        if {"latitude", "longitude"} <= obj.properties.keys():
+            # Map viewport queries ("everything in this bounding box") filter on both.
+            statements.append(
+                f"CREATE INDEX ON {object_table(obj, schema)} ({q('latitude')}, {q('longitude')})"
+            )
     for link in ontology.link_types:
         if link.cardinality == "many_to_one":
             # Reverse traversal (County -> its Earthquakes) looks up by the foreign key.

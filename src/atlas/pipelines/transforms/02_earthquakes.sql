@@ -19,7 +19,15 @@ latest AS (
     QUALIFY row_number() OVER (PARTITION BY id ORDER BY updated DESC) = 1
 ),
 
--- Link each event to the nearest county centroid (haversine distance), within 100 km.
+-- Link each event to the county that contains its epicentre...
+contained AS (
+    SELECT e.id, s.geoid
+    FROM latest e
+    JOIN clean.county_shapes s ON ST_Contains(s.geom, ST_Point(e.longitude, e.latitude))
+),
+
+-- ...or, offshore or just across the border, to the nearest county centroid (haversine distance)
+-- within 100 km: the US county most likely to feel it.
 distances AS (
     SELECT
         e.id,
@@ -31,6 +39,7 @@ distances AS (
         )) AS km
     FROM latest e
     CROSS JOIN clean.county_base c
+    WHERE e.id NOT IN (SELECT id FROM contained)
 ),
 nearest AS (
     SELECT id, arg_min(geoid, km) AS geoid, min(km) AS km
@@ -52,8 +61,9 @@ SELECT
     e.tsunami = 1                       AS tsunami_flag,
     e.alert                             AS pager_alert,
     e.status                            AS review_status,
-    n.geoid                             AS county_geoid,
-    round(n.km, 1)                      AS distance_to_county_km,
+    coalesce(c.geoid, n.geoid)          AS county_geoid,
+    CASE WHEN c.geoid IS NOT NULL THEN 0 ELSE round(n.km, 1) END AS distance_to_county_km,
     e.url
 FROM latest e
+LEFT JOIN contained c USING (id)
 LEFT JOIN nearest n USING (id);

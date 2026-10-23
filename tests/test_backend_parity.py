@@ -40,6 +40,21 @@ CASES = {
     "many-to-many, forward": lambda s: s.linked("WeatherAlert", "a2", "counties"),
     "many-to-many, reverse": lambda s: s.linked("County", "06025", "weatherAlerts", order_by="sent_at", descending=True),
     "two hops": lambda s: s.objects("Earthquake").where("magnitude", "gte", 1).search_around("county").search_around("weatherAlerts").fetch(),
+    # Phase 2 objects and links
+    "get facility": lambda s: s.get("Facility", "hospital/way/1"),
+    "county facilities": lambda s: s.linked("County", "06025", "facilities", order_by="name"),
+    "county fire detections": lambda s: s.linked("County", "48001", "fireDetections"),
+    "facility -> county": lambda s: s.linked("Facility", "shelter/node/3", "county"),
+    "hospitals in alerted counties": lambda s: (
+        s.objects("County").where("active_alert_count", "gt", 0)
+        .search_around("facilities").where("kind", "eq", "hospital").fetch()
+    ),
+    "viewport box": lambda s: (
+        s.objects("Facility").where("latitude", "gte", 32).where("latitude", "lte", 33)
+        .where("longitude", "gte", -116).where("longitude", "lte", -115).fetch()
+    ),
+    "facilities by kind": lambda s: s.objects("Facility").aggregate([("kind", None)]),
+    "people under alert": lambda s: s.objects("County").where("active_alert_count", "gt", 0).aggregate([], [("sum", "population")]),
     # Aggregations
     "group by string": lambda s: s.objects("WeatherAlert").aggregate([("severity", None)]),
     "ties are deterministic": lambda s: s.objects("County").aggregate([("state", None)]),
