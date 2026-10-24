@@ -54,7 +54,14 @@ def cmd_serve(args) -> None:
 
     from atlas.api import create_app
 
-    uvicorn.run(create_app(), host=args.host, port=args.port)
+    uvicorn.run(
+        create_app(),
+        host=args.host,
+        port=args.port,
+        # Behind a load balancer, trust its X-Forwarded-* headers for the client address and scheme.
+        proxy_headers=args.behind_proxy,
+        forwarded_allow_ips="*" if args.behind_proxy else None,
+    )
 
 
 def main() -> None:
@@ -85,6 +92,7 @@ def main() -> None:
     serve = sub.add_parser("serve", help="Run the Ontology API (read-only; run `atlas worker` alongside)")
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8000)
+    serve.add_argument("--behind-proxy", action="store_true", help="Trust X-Forwarded-* headers (behind a load balancer)")
     serve.set_defaults(func=cmd_serve)
 
     args = parser.parse_args()

@@ -22,6 +22,10 @@ class OntologyQueryError(ValueError):
     """A query the caller got wrong: unknown property, bad operator, a value that won't cast."""
 
 
+class IndexNotReady(RuntimeError):
+    """The object store hasn't been built yet (no ETL run has finished)."""
+
+
 def snake_case(api_name: str) -> str:
     """WeatherAlert -> weather_alert, weatherAlertCounty -> weather_alert_county."""
     return re.sub(r"(?<!^)(?=[A-Z])", "_", api_name).lower()
@@ -78,17 +82,23 @@ class PostgresBackend:
         "boolean": "BOOLEAN", "timestamp": "TIMESTAMPTZ",
     }
 
-    def __init__(self, database_url: str, min_size: int = 1, max_size: int = 10):
+    def __init__(self, database_url: str, min_size: int = 1, max_size: int = 10, statement_timeout_ms: int | None = None):
         from psycopg_pool import ConnectionPool
 
+        # Pin the session time zone so timestamps and date_trunc buckets don't depend on the host.
+        options = "-c TimeZone=UTC"
+        if statement_timeout_ms:
+            options += f" -c statement_timeout={int(statement_timeout_ms)}"
         self.pool = ConnectionPool(
             database_url,
             min_size=min_size,
             max_size=max_size,
-            # Pin the session time zone so timestamps and date_trunc buckets don't depend on the host.
-            kwargs={"options": "-c TimeZone=UTC"},
+            kwargs={"options": options},
             open=True,
         )
+
+    def is_indexed(self) -> bool:
+        return self.query(f"SELECT to_regnamespace('{INDEX_SCHEMA}')", ())[0][0] is not None
 
     def object_table(self, obj: ObjectTypeDef) -> str:
         return f"{INDEX_SCHEMA}.{snake_case(obj.api_name)}"
@@ -104,6 +114,10 @@ class PostgresBackend:
                 return conn.execute(sql, params).fetchall()
         except psycopg.errors.DataError as exc:
             raise OntologyQueryError(str(exc).splitlines()[0]) from exc
+        except psycopg.errors.QueryCanceled as exc:
+            raise OntologyQueryError("Query took too long; add filters or a smaller limit") from exc
+        except (psycopg.errors.UndefinedTable, psycopg.errors.InvalidSchemaName) as exc:
+            raise IndexNotReady("The object store has not been built yet; run the ETL (atlas sync)") from exc
 
     def close(self) -> None:
         self.pool.close()

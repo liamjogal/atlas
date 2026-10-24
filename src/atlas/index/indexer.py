@@ -14,7 +14,9 @@ from datetime import datetime
 
 import duckdb
 import psycopg
+from psycopg import sql
 
+from atlas.config import READER_PASSWORD, READER_ROLE
 from atlas.index.schema import META_DDL, create_indexes, create_tables, join_table, object_table, q
 from atlas.ontology.registry import Ontology
 
@@ -25,6 +27,39 @@ def ensure_meta(conn: psycopg.Connection) -> None:
     with conn.transaction():
         for statement in META_DDL:
             conn.execute(statement)
+        if READER_ROLE:
+            role = sql.Identifier(READER_ROLE)
+            conn.execute(sql.SQL("GRANT USAGE ON SCHEMA atlas_meta TO {}").format(role))
+            conn.execute(sql.SQL("GRANT SELECT ON atlas_meta.sync_runs TO {}").format(role))
+
+
+def ensure_reader_role(conn: psycopg.Connection, role: str | None = None, password: str | None = None) -> None:
+    """Create the API's read-only login role, or reset its password to the configured one.
+
+    Runs from the ETL (which can reach the database), so a fresh deployment needs no manual SQL.
+    """
+    role, password = role or READER_ROLE, password or READER_PASSWORD
+    if not (role and password):
+        return
+    with conn.transaction():
+        exists = conn.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (role,)).fetchone()
+        statement = "ALTER ROLE {} WITH LOGIN PASSWORD {}" if exists else "CREATE ROLE {} LOGIN PASSWORD {}"
+        conn.execute(sql.SQL(statement).format(sql.Identifier(role), sql.Literal(password)))
+        conn.execute(sql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(
+            sql.Identifier(conn.info.dbname), sql.Identifier(role)))
+
+
+def grant_reader(conn: psycopg.Connection, schema: str, role: str | None = None) -> None:
+    """Let the API's read-only role see a freshly built index.
+
+    The index schema is rebuilt from scratch on every run, so grants never carry over:
+    they're reissued on the staging schema before it's swapped live.
+    """
+    role = role or READER_ROLE
+    if not role:
+        return
+    conn.execute(sql.SQL("GRANT USAGE ON SCHEMA {} TO {}").format(sql.Identifier(schema), sql.Identifier(role)))
+    conn.execute(sql.SQL("GRANT SELECT ON ALL TABLES IN SCHEMA {} TO {}").format(sql.Identifier(schema), sql.Identifier(role)))
 
 
 def _copy(conn: psycopg.Connection, duck: duckdb.DuckDBPyConnection, source: str, target: str, columns: list[str]) -> int:
@@ -38,6 +73,7 @@ def _copy(conn: psycopg.Connection, duck: duckdb.DuckDBPyConnection, source: str
 
 def build_index(ontology: Ontology, duck: duckdb.DuckDBPyConnection, conn: psycopg.Connection) -> dict[str, int]:
     """Rebuild the object store from the clean datasets and swap it live. Returns row counts."""
+    ensure_reader_role(conn)
     ensure_meta(conn)
     counts: dict[str, int] = {}
 
@@ -59,6 +95,7 @@ def build_index(ontology: Ontology, duck: duckdb.DuckDBPyConnection, conn: psyco
             conn.execute(statement)
         for name, obj in ontology.object_types.items():
             conn.execute(f"ANALYZE {object_table(obj, STAGING)}")
+        grant_reader(conn, STAGING)
 
     # The swap: renames are instant, and doing all three in one transaction makes it atomic.
     with conn.transaction():

@@ -39,6 +39,14 @@ HTTP_HEADERS = {"User-Agent": "atlas-ontology-learning-project"}
 # clean datasets directly ("duckdb", for offline development; no separate worker then).
 OBJECT_STORE = os.environ.get("ATLAS_OBJECT_STORE", "postgres")
 DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://localhost/atlas")
+# In production the API connects as a read-only role; locally it can share DATABASE_URL.
+API_DATABASE_URL = os.environ.get("ATLAS_READ_ONLY_DATABASE_URL", DATABASE_URL)
+# A database role the indexer grants SELECT to on every rebuilt index (the API's read-only role).
+READER_ROLE = os.environ.get("ATLAS_READER_ROLE")
+# If set, the indexer creates that role (or updates its password) so deployments need no manual SQL.
+READER_PASSWORD = os.environ.get("ATLAS_READER_PASSWORD")
+# API queries are cancelled after this long, so a public endpoint can't run away with the database.
+API_STATEMENT_TIMEOUT_MS = int(os.environ.get("ATLAS_API_STATEMENT_TIMEOUT_MS", "10000"))
 
 # Geofabrik extracts to build facilities from (paths under download.geofabrik.de). The full US
 # file is ~12 GB; for local development a single small state works, e.g. north-america/us/rhode-island.

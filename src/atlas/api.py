@@ -12,13 +12,15 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from atlas.config import DATABASE_URL, OBJECT_STORE, ONTOLOGY_PATH, WEB_DIST_DIR
+from atlas.config import API_DATABASE_URL, API_STATEMENT_TIMEOUT_MS, OBJECT_STORE, ONTOLOGY_PATH, WEB_DIST_DIR
 from atlas.db import connect
 from atlas.ontology import (
-    Backend, DuckDBBackend, ObjectStore, OntologyQueryError, PostgresBackend, load_ontology, ontology_hash,
+    Backend, DuckDBBackend, IndexNotReady, ObjectStore, OntologyQueryError, PostgresBackend, load_ontology,
+    ontology_hash,
 )
 from atlas.sync import read_last_sync_file
 
@@ -95,11 +97,9 @@ def open_backend(ontology) -> Backend:
             raise RuntimeError("Ontology does not match the data:\n  " + "\n  ".join(problems))
         return DuckDBBackend(con)
 
-    backend = PostgresBackend(DATABASE_URL)
-    if backend.query("SELECT to_regnamespace('ontology')", ())[0][0] is None:
-        backend.close()
-        raise RuntimeError("The object store has not been indexed yet. Run `uv run atlas sync` first.")
-    return backend
+    # Starts even before the first index exists: health answers 503 until an ETL run builds it,
+    # so a load balancer simply holds traffic during a fresh deployment.
+    return PostgresBackend(API_DATABASE_URL, statement_timeout_ms=API_STATEMENT_TIMEOUT_MS)
 
 
 def last_sync(backend: Backend) -> dict | None:
@@ -133,10 +133,18 @@ def create_app() -> FastAPI:
             raise HTTPException(404, str(exc.args[0]))
         except OntologyQueryError as exc:
             raise HTTPException(400, str(exc))
+        except IndexNotReady as exc:
+            raise HTTPException(503, str(exc))
 
     @app.get("/api/health")
     def health(request: Request):
         backend = store(request).backend
+        if isinstance(backend, PostgresBackend) and not backend.is_indexed():
+            # Up, but nothing to serve yet: load balancers keep traffic away until an ETL run finishes.
+            return JSONResponse(
+                {"status": "not_indexed", "object_store": backend.name, "detail": "Run the ETL (atlas sync) to build the index"},
+                status_code=503,
+            )
         sync = last_sync(backend)
         return {
             "status": "ok",
