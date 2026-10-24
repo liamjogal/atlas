@@ -7,7 +7,9 @@ alarm_email = "you@example.com" # confirm the subscription email AWS sends
 # sync_schedule       = "rate(5 minutes)"
 # facilities_schedule = "rate(7 days)"
 
-# Leaner and cheaper (~$60/month):
-# api_count         = 1
-# etl_instance_type = "t4g.small"
-# waf_enabled       = false
+# The defaults are the lean setup (~$60/month): 1 API task, t4g.small ETL instance with swap,
+# no WAF (the API rate-limits per visitor itself). For more headroom (~$100/month):
+# api_count         = 2
+# etl_instance_type = "t4g.medium"
+# etl_memory_mb     = 3072
+# waf_enabled       = true

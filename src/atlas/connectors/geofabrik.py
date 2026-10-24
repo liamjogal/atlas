@@ -24,7 +24,7 @@ from pathlib import Path
 
 import httpx
 
-from atlas.config import HTTP_HEADERS, OSM_DIR, OSM_REGIONS, OSMIUM_BIN
+from atlas.config import HTTP_HEADERS, OSM_DIR, OSM_REGIONS, OSM_UPDATE_MAX_MB, OSMIUM_BIN
 from atlas.connectors._landing import landing_dir, read_state, write_state
 
 log = logging.getLogger("atlas.geofabrik")
@@ -125,9 +125,10 @@ def update_extract(region: str) -> str:
     # Must match the replication URL in the file's header exactly (no trailing slash).
     server = f"{BASE_URL}/{region}-updates"
     path = extract_path(region)
-    for _ in range(10):  # each run applies up to ~1 GB of changes; 1 can mean "more available"
+    for _ in range(40):  # each pass applies up to --size of changes; 1 can mean "more available"
         before = path.stat().st_mtime_ns
-        result = _run([_up_to_date_tool(), "--server", server, str(path)])
+        size = ["--size", str(OSM_UPDATE_MAX_MB)] if OSM_UPDATE_MAX_MB else []
+        result = _run([_up_to_date_tool(), "--server", server, *size, str(path)])
         if result.returncode == 0:
             return "up to date"
         # Exit code 1 means "partly applied, run again", but argument errors also exit 1 and

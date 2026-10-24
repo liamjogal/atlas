@@ -131,6 +131,11 @@ resource "aws_launch_template" "etl" {
     #!/bin/bash
     echo "ECS_CLUSTER=${aws_ecs_cluster.main.name}" >> /etc/ecs/ecs.config
     mkdir -p /var/lib/atlas-data
+    # Swap gives the weekly OSM update room beyond RAM on small instances.
+    if [ ${var.etl_swap_gb} -gt 0 ] && [ ! -f /swapfile ]; then
+      fallocate -l ${var.etl_swap_gb}G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
+      echo "/swapfile none swap sw 0 0" >> /etc/fstab
+    fi
   EOT
   )
 }

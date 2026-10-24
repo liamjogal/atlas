@@ -57,3 +57,10 @@ OSM_REGIONS = [
 ]
 # The osmium command-line tool (brew install osmium-tool / apt-get install osmium-tool).
 OSMIUM_BIN = os.environ.get("ATLAS_OSMIUM_BIN", "osmium")
+# Max MB of OSM changes pyosmium applies per pass (it holds them in memory). Unset = its default
+# (~1 GB); lower it on small machines. Passes repeat until the extract is up to date.
+OSM_UPDATE_MAX_MB = os.environ.get("ATLAS_OSM_UPDATE_MAX_MB")
+
+# Per-client API rate limit (requests per minute; 0 = off). In production the client is the
+# CloudFront-Viewer-Address header, which CloudFront sets and visitors cannot forge.
+RATE_LIMIT_PER_MINUTE = int(os.environ.get("ATLAS_RATE_LIMIT_PER_MINUTE", "0"))

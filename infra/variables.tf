@@ -40,10 +40,13 @@ variable "facilities_schedule" {
 
 # --- Sizing -------------------------------------------------------------------------------------
 
+# Defaults are the lean setup (~$60/month). For more headroom: api_count = 2,
+# etl_instance_type = "t4g.medium" with etl_memory_mb = 3072, waf_enabled = true.
+
 variable "api_count" {
   description = "Number of API tasks behind the load balancer."
   type        = number
-  default     = 2
+  default     = 1
 }
 
 variable "api_cpu" {
@@ -57,9 +60,27 @@ variable "api_memory" {
 }
 
 variable "etl_instance_type" {
-  description = "EC2 instance for ETL tasks (needs ~4 GB RAM for the weekly OSM steps; Graviton)."
+  description = "EC2 instance for ETL tasks (Graviton). t4g.small (2 GB) works with swap and chunked OSM updates."
   type        = string
-  default     = "t4g.medium"
+  default     = "t4g.small"
+}
+
+variable "etl_memory_mb" {
+  description = "Memory the ETL task reserves; must fit the instance (t4g.small ~1.8 GB usable, t4g.medium ~3.8 GB)."
+  type        = number
+  default     = 1536
+}
+
+variable "etl_swap_gb" {
+  description = "Swap file on the ETL instance, so the weekly OSM update can exceed RAM briefly."
+  type        = number
+  default     = 4
+}
+
+variable "osm_update_max_mb" {
+  description = "Max MB of OSM changes applied per pass (held in memory); passes repeat until up to date."
+  type        = number
+  default     = 256
 }
 
 variable "etl_disk_gb" {
@@ -74,9 +95,15 @@ variable "db_instance_class" {
 }
 
 variable "waf_enabled" {
-  description = "Attach a WAF (rate limiting + AWS common rules) to CloudFront. ~$7/month."
+  description = "Attach a WAF (rate limiting + AWS common rules) to CloudFront. ~$7/month. Off = the API's own rate limit."
   type        = bool
-  default     = true
+  default     = false
+}
+
+variable "api_rate_limit_per_minute" {
+  description = "The API's own per-visitor limit (keyed on CloudFront-Viewer-Address). A page load makes ~15 calls."
+  type        = number
+  default     = 240
 }
 
 variable "waf_rate_limit" {

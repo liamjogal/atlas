@@ -9,8 +9,22 @@ data "aws_cloudfront_cache_policy" "optimized" {
   name = "Managed-CachingOptimized"
 }
 
-data "aws_cloudfront_origin_request_policy" "all_viewer_except_host" {
-  name = "Managed-AllViewerExceptHostHeader"
+# Forward everything the app needs, plus CloudFront-Viewer-Address: the visitor's real IP,
+# set by CloudFront itself, which the API's rate limit keys on.
+resource "aws_cloudfront_origin_request_policy" "api" {
+  name = "${var.project}-api"
+  headers_config {
+    header_behavior = "allViewerAndWhitelistCloudFront"
+    headers {
+      items = ["CloudFront-Viewer-Address"]
+    }
+  }
+  query_strings_config {
+    query_string_behavior = "all"
+  }
+  cookies_config {
+    cookie_behavior = "none"
+  }
 }
 
 resource "aws_cloudfront_distribution" "main" {
@@ -43,7 +57,7 @@ resource "aws_cloudfront_distribution" "main" {
     allowed_methods          = ["GET", "HEAD", "OPTIONS", "PUT", "POST", "PATCH", "DELETE"]
     cached_methods           = ["GET", "HEAD"]
     cache_policy_id          = data.aws_cloudfront_cache_policy.disabled.id
-    origin_request_policy_id = data.aws_cloudfront_origin_request_policy.all_viewer_except_host.id
+    origin_request_policy_id = aws_cloudfront_origin_request_policy.api.id
     compress                 = true
   }
 

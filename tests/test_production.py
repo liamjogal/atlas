@@ -79,3 +79,20 @@ def test_slow_queries_are_cancelled(pg_url):
             backend.query("SELECT pg_sleep(1)", ())
     finally:
         backend.close()
+
+
+def test_rate_limit_keys_on_the_cloudfront_viewer_address(ontology, duck_store):
+    from atlas.ratelimit import RateLimitMiddleware
+
+    app = api.create_app()
+    app.add_middleware(RateLimitMiddleware, per_minute=3)
+    app.state.store = ObjectStore(ontology, duck_store.backend)
+    app.state.ontology_hash = "test"
+    client = TestClient(app)
+
+    visitor = {"CloudFront-Viewer-Address": "203.0.113.7:51234"}
+    assert [client.get("/api/ontology", headers=visitor).status_code for _ in range(4)] == [200, 200, 200, 429]
+    # A different visitor has their own budget, and a spoofed X-Forwarded-For doesn't help the first.
+    assert client.get("/api/ontology", headers={"CloudFront-Viewer-Address": "198.51.100.2:443"}).status_code == 200
+    spoof = {**visitor, "X-Forwarded-For": "10.9.9.9"}
+    assert client.get("/api/ontology", headers=spoof).status_code == 429

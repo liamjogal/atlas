@@ -16,7 +16,9 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from atlas.config import API_DATABASE_URL, API_STATEMENT_TIMEOUT_MS, OBJECT_STORE, ONTOLOGY_PATH, WEB_DIST_DIR
+from atlas.config import (
+    API_DATABASE_URL, API_STATEMENT_TIMEOUT_MS, OBJECT_STORE, ONTOLOGY_PATH, RATE_LIMIT_PER_MINUTE, WEB_DIST_DIR,
+)
 from atlas.db import connect
 from atlas.ontology import (
     Backend, DuckDBBackend, IndexNotReady, ObjectStore, OntologyQueryError, PostgresBackend, load_ontology,
@@ -122,6 +124,10 @@ def create_app() -> FastAPI:
         backend.close()
 
     app = FastAPI(title="Atlas Ontology API", lifespan=lifespan)
+    if RATE_LIMIT_PER_MINUTE > 0:
+        from atlas.ratelimit import RateLimitMiddleware
+
+        app.add_middleware(RateLimitMiddleware, per_minute=RATE_LIMIT_PER_MINUTE)
 
     def store(request: Request) -> ObjectStore:
         return request.app.state.store

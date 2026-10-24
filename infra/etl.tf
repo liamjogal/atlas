@@ -35,12 +35,13 @@ resource "aws_ecs_task_definition" "etl" {
     image             = "${aws_ecr_repository.atlas.repository_url}:latest"
     essential         = true
     command           = local.etl_commands.sync
-    memoryReservation = 3072 # the weekly OSM update and filter need ~2-3 GB
+    memoryReservation = var.etl_memory_mb # soft limit: the task can use more (and swap) if it's free
     mountPoints       = [{ sourceVolume = "atlas-data", containerPath = "/data" }]
     environment = [
       { name = "ATLAS_DATA_DIR", value = "/data" },
       { name = "ATLAS_READER_ROLE", value = "atlas_api" },
       { name = "ATLAS_OSM_REGIONS", value = var.osm_regions },
+      { name = "ATLAS_OSM_UPDATE_MAX_MB", value = tostring(var.osm_update_max_mb) },
     ]
     secrets = [
       { name = "DATABASE_URL", valueFrom = aws_secretsmanager_secret.database_url.arn },

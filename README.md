@@ -145,15 +145,15 @@ Filters use `<property>.<op>=<value>` with ops `eq ne gt gte lt lte contains is_
 The production setup is Terraform in `infra/` with GitHub Actions in `.github/workflows/`:
 
 - **API** (and web app): Fargate behind an ALB, reachable only through CloudFront at
-  `https://<id>.cloudfront.net` with a WAF rate limit. It connects as a read-only database role,
-  with a query timeout.
+  `https://<id>.cloudfront.net`. It rate-limits each visitor (WAF optional), and connects as a
+  read-only database role with a query timeout.
 - **ETL**: one-off ECS tasks on a single EC2 instance, whose disk keeps the OSM extract and DuckDB
   between runs.
 - **Postgres**: RDS in private subnets.
 - **Secrets**: Secrets Manager.
 - **Deploys**: GitHub authenticates with OIDC, so no AWS keys are stored anywhere.
 
-Roughly $100/month as configured; see `infra/terraform.tfvars.example` for a ~$60 setup.
+Roughly $60/month with the default (lean) settings; `infra/terraform.tfvars.example` shows the ~$100 setup with more headroom.
 
 **One-time setup**
 

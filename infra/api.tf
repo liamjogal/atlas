@@ -86,6 +86,7 @@ resource "aws_ecs_task_definition" "api" {
     portMappings = [{ containerPort = 8000, protocol = "tcp" }]
     environment = [
       { name = "ATLAS_API_STATEMENT_TIMEOUT_MS", value = "10000" },
+      { name = "ATLAS_RATE_LIMIT_PER_MINUTE", value = tostring(var.api_rate_limit_per_minute) },
     ]
     secrets = [
       { name = "ATLAS_READ_ONLY_DATABASE_URL", valueFrom = aws_secretsmanager_secret.read_only_database_url.arn },
