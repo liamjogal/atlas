@@ -42,7 +42,6 @@ const BASEMAP = 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.jso
 const QUAKE_BLUE = '#3987e5'
 // Fires get a hue of their own: the reds and oranges are reserved for alert severity.
 const FIRE_COLOR = '#d55181'
-const FACILITY_FILL = '#e1e0d9'
 
 const topo = countiesTopo as unknown as Topology<{ counties: GeometryCollection; states: GeometryCollection }>
 const countyShapes = feature(topo, topo.objects.counties) as FeatureCollection
@@ -100,6 +99,24 @@ function fireCollection(fires: OntologyObject[]): FeatureCollection {
       properties: { detection_id: f.detection_id, frp: f.frp ?? 0, detected_at: f.detected_at },
     })),
   }
+}
+
+// Facility marker: a rounded square in the kind's colour with a dark rim (hazards are circles),
+// drawn at 2x for crisp edges and registered with the map as an icon image.
+function facilityIcon(color: string): ImageData {
+  const size = 40
+  const canvas = document.createElement('canvas')
+  canvas.width = canvas.height = size
+  const g = canvas.getContext('2d')!
+  g.fillStyle = '#1a1a19'
+  g.beginPath()
+  g.roundRect(0, 0, size, size, 10)
+  g.fill()
+  g.fillStyle = color
+  g.beginPath()
+  g.roundRect(3, 3, size - 6, size - 6, 8)
+  g.fill()
+  return g.getImageData(0, 0, size, size)
 }
 
 function facilityCollection(facilities: OntologyObject[]): FeatureCollection {
@@ -244,42 +261,37 @@ function MapCanvas({ counties, quakes, fires, facilities, selected, onSelect, on
           'circle-stroke-width': 2,
         },
       })
-      // Facilities: a light disc with a letter per kind, only at city scale.
+      // Facilities: a colour-coded square per kind with its letter, only at city scale.
+      for (const [kind, { color }] of Object.entries(FACILITY_KINDS)) {
+        map.addImage(`facility-${kind}`, facilityIcon(color), { pixelRatio: 2 })
+      }
       // Reuse a font the basemap already serves, so the letters render without extra glyph requests.
       const fontOf = (layer: { layout?: unknown }) => (layer.layout as Record<string, unknown> | undefined)?.['text-font']
       const labelFont = (map.getStyle().layers.map(fontOf).find(Array.isArray) as string[] | undefined) ?? ['Open Sans Bold']
       map.addLayer({
         id: 'facilities',
-        type: 'circle',
-        source: 'facilities',
-        minzoom: FACILITY_MIN_ZOOM,
-        paint: {
-          'circle-radius': 8,
-          'circle-color': FACILITY_FILL,
-          'circle-stroke-color': '#1a1a19',
-          'circle-stroke-width': 1,
-        },
-      })
-      map.addLayer({
-        id: 'facility-letters',
         type: 'symbol',
         source: 'facilities',
         minzoom: FACILITY_MIN_ZOOM,
         layout: {
+          'icon-image': ['concat', 'facility-', ['get', 'kind']],
+          'icon-allow-overlap': true,
+          'icon-ignore-placement': true,
           'text-field': ['get', 'letter'],
           'text-font': labelFont,
           'text-size': 10,
           'text-allow-overlap': true,
           'text-ignore-placement': true,
         },
-        paint: { 'text-color': '#0d0d0d' },
+        // White letters with a dark halo stay readable on every one of the four colours.
+        paint: { 'text-color': '#ffffff', 'text-halo-color': '#0d0d0d', 'text-halo-width': 1 },
       })
       map.addLayer({
         id: 'point-selected',
         type: 'circle',
         source: 'facilities',
         filter: ['==', ['get', 'facility_id'], ''],
-        paint: { 'circle-radius': 11, 'circle-color': 'transparent', 'circle-stroke-color': '#ffffff', 'circle-stroke-width': 2 },
+        paint: { 'circle-radius': 14, 'circle-color': 'transparent', 'circle-stroke-color': '#ffffff', 'circle-stroke-width': 2 },
       })
       setLoaded(true)
       reportViewport()
@@ -363,7 +375,6 @@ function MapCanvas({ counties, quakes, fires, facilities, selected, onSelect, on
     if (!loaded) return
     const kindFilter = ['in', ['get', 'kind'], ['literal', visibleKinds]] as never
     mapRef.current!.setFilter('facilities', kindFilter)
-    mapRef.current!.setFilter('facility-letters', kindFilter)
   }, [loaded, visibleKinds])
 
   useEffect(() => {
@@ -405,7 +416,7 @@ function MapCanvas({ counties, quakes, fires, facilities, selected, onSelect, on
         <div className="legend-title">
           Facilities{zoom < FACILITY_MIN_ZOOM && <span className="muted"> · zoom in to show</span>}
         </div>
-        {Object.entries(FACILITY_KINDS).map(([kind, { letter, label }]) => (
+        {Object.entries(FACILITY_KINDS).map(([kind, { letter, label, color }]) => (
           <label key={kind} className="legend-row toggle">
             <input
               type="checkbox"
@@ -414,7 +425,7 @@ function MapCanvas({ counties, quakes, fires, facilities, selected, onSelect, on
                 setVisibleKinds((v) => (e.target.checked ? [...v, kind] : v.filter((k) => k !== kind)))
               }
             />
-            <span className="facility-badge" aria-hidden="true">{letter}</span>
+            <span className="facility-badge" style={{ background: color }} aria-hidden="true">{letter}</span>
             {label}
           </label>
         ))}
