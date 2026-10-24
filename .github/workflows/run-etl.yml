@@ -1,0 +1,34 @@
+name: Run ETL
+
+# Manual data refresh. While the Terraform schedules are off (the default), this is the only
+# thing that updates the deployed data.
+on:
+  workflow_dispatch:
+    inputs:
+      job:
+        description: "sync = live feeds + re-index (~1 min) · facilities = Geofabrik update + re-index"
+        type: choice
+        options: [sync, facilities]
+        default: sync
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency: etl # never two ETL runs at once (they share the DuckDB file)
+
+jobs:
+  run:
+    if: vars.AWS_ROLE_ARN != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+      - name: Run ${{ inputs.job }}
+        run: scripts/run-etl.sh "${{ inputs.job }}"
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}

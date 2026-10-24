@@ -1,0 +1,13 @@
+# Copy to terraform.tfvars (git-ignored) and adjust.
+
+alarm_email = "you@example.com" # confirm the subscription email AWS sends
+
+# ETL is manual by default ("Run ETL" GitHub workflow or scripts/run-etl.sh).
+# Uncomment to run it automatically, then `terraform apply`; set back to null to go manual again.
+# sync_schedule       = "rate(5 minutes)"
+# facilities_schedule = "rate(7 days)"
+
+# Leaner and cheaper (~$60/month):
+# api_count         = 1
+# etl_instance_type = "t4g.small"
+# waf_enabled       = false

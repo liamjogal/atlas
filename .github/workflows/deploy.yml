@@ -1,0 +1,60 @@
+name: Deploy
+
+# Builds the image and rolls out the API. It never runs the ETL: that's manual ("Run ETL")
+# unless schedules are enabled in Terraform.
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  id-token: write # short-lived AWS credentials via OIDC
+  contents: read
+
+concurrency: deploy
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+  PROJECT: atlas
+
+jobs:
+  deploy:
+    # Skipped until AWS is set up (repository variable AWS_ROLE_ARN = terraform output github_deploy_role_arn).
+    if: vars.AWS_ROLE_ARN != ''
+    runs-on: ubuntu-24.04-arm # native ARM build for the Graviton tasks
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push the image
+        env:
+          IMAGE: ${{ steps.ecr.outputs.registry }}/atlas
+        run: |
+          docker build --target runtime -t "$IMAGE:${GITHUB_SHA::12}" -t "$IMAGE:latest" .
+          docker push --all-tags "$IMAGE"
+
+      - name: Point the API and ETL task definitions at the new image, roll the API
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          IMAGE="$REGISTRY/atlas:${GITHUB_SHA::12}"
+          for family in api etl; do
+            aws ecs describe-task-definition --task-definition "$PROJECT-$family" --query taskDefinition \
+              | jq --arg image "$IMAGE" '.containerDefinitions[0].image = $image
+                  | del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities,
+                        .registeredAt, .registeredBy)' > "$family.json"
+            ARN=$(aws ecs register-task-definition --cli-input-json "file://$family.json" \
+              --query taskDefinition.taskDefinitionArn --output text)
+            echo "$family -> $ARN"
+            [ "$family" = api ] && API_ARN="$ARN"
+          done
+          aws ecs update-service --cluster "$PROJECT" --service "$PROJECT-api" --task-definition "$API_ARN" >/dev/null
+          aws ecs wait services-stable --cluster "$PROJECT" --services "$PROJECT-api"
+          echo "API is running $IMAGE"
