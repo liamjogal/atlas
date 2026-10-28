@@ -142,6 +142,9 @@ Filters use `<property>.<op>=<value>` with ops `eq ne gt gte lt lte contains is_
 
 ## Deploying to AWS
 
+For what happens in what order, and what is deployed from where, see
+[docs/deployment.md](docs/deployment.md).
+
 The production setup is Terraform in `infra/` with GitHub Actions in `.github/workflows/`:
 
 - **API** (and web app): Fargate behind an ALB, reachable only through CloudFront at
@@ -160,12 +163,13 @@ Roughly $60/month with the default (lean) settings; `infra/terraform.tfvars.exam
 ```bash
 aws configure sso && aws sso login               # your AWS account (IAM Identity Center user)
 scripts/bootstrap-state.sh                       # S3 bucket for Terraform state
-cd infra && cp terraform.tfvars.example terraform.tfvars   # set alarm_email
-terraform init -backend-config=backend.hcl
-terraform apply                                  # creates everything; billing starts here
+cd infra && terraform init -backend-config=backend.hcl
+terraform apply -var-file=production.tfvars      # creates everything; billing starts here
 aws secretsmanager put-secret-value --secret-id atlas/nasa-firms-api-key --secret-string '<key>'
 cd .. && scripts/push-image.sh                   # first image (CI does this afterwards)
 gh variable set AWS_ROLE_ARN --body "$(terraform -chdir=infra output -raw github_deploy_role_arn)"
+gh variable set TERRAFORM_PLAN_ROLE_ARN --body "$(terraform -chdir=infra output -raw github_terraform_plan_role_arn)"
+gh variable set TERRAFORM_APPLY_ROLE_ARN --body "$(terraform -chdir=infra output -raw github_terraform_apply_role_arn)"
 scripts/run-etl.sh sync                          # first index: the site goes live when it finishes
 scripts/run-etl.sh facilities                    # US extract download + facilities (~10-30 min)
 ```
@@ -176,9 +180,13 @@ scripts/run-etl.sh facilities                    # US extract download + facilit
   run the ETL.
 - **Refresh data:** run it manually from GitHub → Actions → *Run ETL* (`sync` or `facilities`), or
   `scripts/run-etl.sh sync|facilities`.
+- **Change infrastructure from GitHub:** edit `infra/` (settings live in `infra/production.tfvars`) in a
+  pull request. The *Infrastructure* workflow posts the Terraform plan as a PR comment. After you merge,
+  it applies, but only once you approve it in the `production` environment (Actions → the waiting run →
+  *Review deployments*).
 - **Make the ETL automatic:** set `sync_schedule = "rate(5 minutes)"` and/or
-  `facilities_schedule = "rate(7 days)"` in `terraform.tfvars`, then `terraform apply`. Set them back
-  to `null` to return to manual. Both modes run the same task.
+  `facilities_schedule = "rate(7 days)"` in `infra/production.tfvars` through that same PR flow. Set them
+  back to `null` to return to manual. Both modes run the same task.
 - **Roll back:** re-run *Deploy* from an older commit, or point the service at an earlier task
   definition revision.
 - **Logs:** `aws logs tail /atlas/api --follow` and `aws logs tail /atlas/etl --follow`. Every ETL
